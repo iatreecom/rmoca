@@ -9,6 +9,7 @@ import 'screens/home_screen.dart';
 import 'screens/settings_screen.dart';
 import 'services/local_store.dart';
 import 'services/settings_repository.dart';
+import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,19 +50,14 @@ class _RmocaAppState extends State<RmocaApp> {
 
   @override
   Widget build(BuildContext context) {
-    ThemeData theme(Brightness b) => ThemeData(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF3D5AFE),
-        brightness: b,
-      ),
-      useMaterial3: true,
-    );
+    final app = context.watch<AppState>();
     return MaterialApp(
       scaffoldMessengerKey: _messenger,
       title: 'rmoca',
       debugShowCheckedModeBanner: false,
-      theme: theme(Brightness.light),
-      darkTheme: theme(Brightness.dark),
+      theme: buildTheme(app.accent, Brightness.light),
+      darkTheme: buildTheme(app.accent, Brightness.dark),
+      themeMode: app.themeMode,
       routes: {
         '/': (_) => const HomeScreen(),
         '/settings': (_) => const SettingsScreen(),

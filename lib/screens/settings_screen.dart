@@ -160,140 +160,319 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: Form(
         key: _form,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
-            Text('Git 저장소', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 4),
-            Text(
-              '메모는 이 기기에 먼저 저장되고, 온라인일 때 지정한 저장소 폴더와 동기화됩니다.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _repo,
-              decoration: const InputDecoration(
-                labelText: '저장소',
-                hintText: 'owner/repo 또는 https://github.com/owner/repo',
-                border: OutlineInputBorder(),
-              ),
-              validator: (v) =>
-                  _parseRepo(v ?? '') == null ? 'owner/repo 형식으로 입력하세요' : null,
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _branch,
-                    decoration: const InputDecoration(
-                      labelText: '브랜치',
-                      hintText: 'main',
-                      border: OutlineInputBorder(),
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _Section(
+                      icon: Icons.cloud_sync_outlined,
+                      title: 'Git 저장소',
+                      subtitle: '메모는 이 기기에 먼저 저장되고, 온라인일 때 지정한 저장소 폴더와 동기화됩니다.',
+                      children: [
+                        TextFormField(
+                          controller: _repo,
+                          decoration: const InputDecoration(
+                            labelText: '저장소',
+                            hintText:
+                                'owner/repo 또는 https://github.com/owner/repo',
+                            prefixIcon: Icon(Icons.source_outlined),
+                          ),
+                          validator: (v) => _parseRepo(v ?? '') == null
+                              ? 'owner/repo 형식으로 입력하세요'
+                              : null,
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: _branch,
+                                decoration: const InputDecoration(
+                                  labelText: '브랜치',
+                                  hintText: 'main',
+                                  prefixIcon: Icon(Icons.call_split_rounded),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 2,
+                              child: TextFormField(
+                                controller: _folder,
+                                decoration: const InputDecoration(
+                                  labelText: '경로 (폴더)',
+                                  hintText: '예: notes (비우면 루트)',
+                                  prefixIcon: Icon(Icons.folder_outlined),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        TextFormField(
+                          controller: _token,
+                          obscureText: !_showToken,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: InputDecoration(
+                            labelText: 'GitHub 액세스 토큰',
+                            helperText:
+                                'Fine-grained 토큰: 해당 저장소의 Contents 읽기/쓰기 권한',
+                            prefixIcon: const Icon(Icons.key_rounded),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _showToken
+                                    ? Icons.visibility_off
+                                    : Icons.visibility,
+                              ),
+                              onPressed: () =>
+                                  setState(() => _showToken = !_showToken),
+                            ),
+                          ),
+                          validator: (v) =>
+                              (v ?? '').trim().isEmpty ? '토큰을 입력하세요' : null,
+                        ),
+                        Row(
+                          children: [
+                            FilledButton.tonalIcon(
+                              onPressed: _testing ? null : _test,
+                              icon: _testing
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.wifi_tethering),
+                              label: const Text('연결 테스트'),
+                            ),
+                            const SizedBox(width: 12),
+                            if (_testResult != null)
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      _testOk
+                                          ? Icons.check_circle_rounded
+                                          : Icons.error_outline_rounded,
+                                      size: 18,
+                                      color: _testOk
+                                          ? Colors.green.shade600
+                                          : Theme.of(context).colorScheme.error,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        _testResult!,
+                                        style: TextStyle(
+                                          color: _testOk
+                                              ? Colors.green.shade700
+                                              : Theme.of(context)
+                                                    .colorScheme
+                                                    .error,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
                     ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  flex: 2,
-                  child: TextFormField(
-                    controller: _folder,
-                    decoration: const InputDecoration(
-                      labelText: '경로 (폴더)',
-                      hintText: '예: notes (비우면 저장소 루트)',
-                      border: OutlineInputBorder(),
+                    _Section(
+                      icon: Icons.sync_rounded,
+                      title: '동기화',
+                      children: [
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('자동 동기화'),
+                          subtitle: const Text(
+                            '저장 후, 온라인 복귀 시, 앱을 열 때 자동으로 동기화',
+                          ),
+                          value: _autoSync,
+                          onChanged: (v) => setState(() => _autoSync = v),
+                        ),
+                        TextFormField(
+                          controller: _device,
+                          decoration: const InputDecoration(
+                            labelText: '기기 이름',
+                            helperText: '충돌 사본과 커밋 메시지에 표시됩니다',
+                            prefixIcon: Icon(Icons.devices_rounded),
+                          ),
+                        ),
+                        TextFormField(
+                          controller: _api,
+                          decoration: const InputDecoration(
+                            labelText: 'API 주소 (고급)',
+                            helperText: 'GitHub Enterprise: https://호스트/api/v3',
+                            prefixIcon: Icon(Icons.dns_outlined),
+                          ),
+                        ),
+                        if (app.lastError != null)
+                          Text(
+                            '최근 동기화 메시지: ${app.lastError}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                      ],
                     ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _token,
-              obscureText: !_showToken,
-              autocorrect: false,
-              enableSuggestions: false,
-              decoration: InputDecoration(
-                labelText: 'GitHub 액세스 토큰',
-                helperText: 'Fine-grained 토큰: 해당 저장소의 Contents 읽기/쓰기 권한',
-                border: const OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  icon: Icon(
-                    _showToken ? Icons.visibility_off : Icons.visibility,
-                  ),
-                  onPressed: () => setState(() => _showToken = !_showToken),
-                ),
-              ),
-              validator: (v) => (v ?? '').trim().isEmpty ? '토큰을 입력하세요' : null,
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _testing ? null : _test,
-                  icon: _testing
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.wifi_tethering),
-                  label: const Text('연결 테스트'),
-                ),
-                const SizedBox(width: 12),
-                if (_testResult != null)
-                  Expanded(
-                    child: Text(
-                      _testResult!,
-                      style: TextStyle(
-                        color: _testOk
-                            ? Colors.green.shade700
-                            : Theme.of(context).colorScheme.error,
-                      ),
+                    _Section(
+                      icon: Icons.palette_outlined,
+                      title: '화면',
+                      children: [
+                        SegmentedButton<ThemeMode>(
+                          segments: const [
+                            ButtonSegment(
+                              value: ThemeMode.system,
+                              icon: Icon(Icons.brightness_auto_outlined),
+                              label: Text('시스템'),
+                            ),
+                            ButtonSegment(
+                              value: ThemeMode.light,
+                              icon: Icon(Icons.light_mode_outlined),
+                              label: Text('라이트'),
+                            ),
+                            ButtonSegment(
+                              value: ThemeMode.dark,
+                              icon: Icon(Icons.dark_mode_outlined),
+                              label: Text('다크'),
+                            ),
+                          ],
+                          selected: {app.themeMode},
+                          onSelectionChanged: (s) =>
+                              app.setAppearance(mode: s.first),
+                        ),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: [
+                            for (final c in AppState.accentColors)
+                              InkWell(
+                                customBorder: const CircleBorder(),
+                                onTap: () => app.setAppearance(accent: c),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 150),
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: c,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color:
+                                          app.accent.toARGB32() == c.toARGB32()
+                                          ? Theme.of(context)
+                                                .colorScheme
+                                                .onSurface
+                                          : Colors.transparent,
+                                      width: 3,
+                                    ),
+                                  ),
+                                  child: app.accent.toARGB32() == c.toARGB32()
+                                      ? const Icon(
+                                          Icons.check_rounded,
+                                          color: Colors.white,
+                                        )
+                                      : null,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
                     ),
-                  ),
-              ],
-            ),
-            const Divider(height: 32),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('자동 동기화'),
-              subtitle: const Text('저장 후, 온라인 복귀 시, 앱을 열 때 자동으로 동기화'),
-              value: _autoSync,
-              onChanged: (v) => setState(() => _autoSync = v),
-            ),
-            const SizedBox(height: 8),
-            TextFormField(
-              controller: _device,
-              decoration: const InputDecoration(
-                labelText: '기기 이름',
-                helperText: '충돌 사본과 커밋 메시지에 표시됩니다',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              title: const Text('고급'),
-              children: [
-                TextFormField(
-                  controller: _api,
-                  decoration: const InputDecoration(
-                    labelText: 'API 주소',
-                    helperText: 'GitHub Enterprise: https://호스트/api/v3',
-                    border: OutlineInputBorder(),
-                  ),
+                    _Section(
+                      icon: Icons.draw_outlined,
+                      title: '그림',
+                      children: [
+                        SegmentedButton<DrawingMode>(
+                          segments: const [
+                            ButtonSegment(
+                              value: DrawingMode.file,
+                              icon: Icon(Icons.insert_drive_file_outlined),
+                              label: Text('SVG 파일'),
+                            ),
+                            ButtonSegment(
+                              value: DrawingMode.embedded,
+                              icon: Icon(Icons.code_rounded),
+                              label: Text('메모에 넣기'),
+                            ),
+                          ],
+                          selected: {app.drawingMode},
+                          onSelectionChanged: (s) =>
+                              app.setDrawingMode(s.first),
+                        ),
+                        Text(
+                          '새 그림의 기본 저장 방식입니다. 그림을 만들 때마다 바꿀 수도 있습니다.',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(context).colorScheme.outline,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-              ],
-            ),
-            if (app.lastError != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                '최근 동기화 메시지: ${app.lastError}',
-                style: Theme.of(context).textTheme.bodySmall,
               ),
-            ],
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Section extends StatelessWidget {
+  const _Section({
+    required this.icon,
+    required this.title,
+    required this.children,
+    this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Material(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Text(
+                    title,
+                    style: t.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+              if (subtitle != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  subtitle!,
+                  style: t.bodySmall?.copyWith(color: scheme.outline),
+                ),
+              ],
+              for (final child in children) ...[
+                const SizedBox(height: 14),
+                child,
+              ],
+            ],
+          ),
         ),
       ),
     );

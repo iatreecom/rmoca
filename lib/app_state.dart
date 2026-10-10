@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter/widgets.dart';
 
 import 'package:path/path.dart' as p;
@@ -56,6 +57,17 @@ class AppState extends ChangeNotifier {
   List<String> folders = [];
   DrawingMode drawingMode = DrawingMode.file;
   SortMode sortMode = SortMode.modifiedDesc;
+  ThemeMode themeMode = ThemeMode.system;
+  Color accent = accentColors.first;
+
+  static const accentColors = [
+    Color(0xFF4F5BD5),
+    Color(0xFF0F9D8A),
+    Color(0xFFE0663E),
+    Color(0xFFC2185B),
+    Color(0xFF7E57C2),
+    Color(0xFF546E7A),
+  ];
 
   /// Synced favorites and folder colors.
   NoteMeta meta = NoteMeta();
@@ -89,6 +101,9 @@ class AppState extends ChangeNotifier {
     settings = await _settingsRepo.load();
     drawingMode = await _settingsRepo.loadDrawingMode();
     sortMode = await _settingsRepo.loadSortMode();
+    final (mode, color) = await _settingsRepo.loadAppearance(accent);
+    themeMode = mode;
+    accent = color;
     await store.purgeTrash(trashRetention);
     lastSync = (await store.loadState())?.lastSync;
     await refreshNotes();
@@ -175,6 +190,13 @@ class AppState extends ChangeNotifier {
       if (fa != fb) return fa ? -1 : 1;
       return byMode(a, b);
     });
+  }
+
+  Future<void> setAppearance({ThemeMode? mode, Color? accent}) async {
+    themeMode = mode ?? themeMode;
+    this.accent = accent ?? this.accent;
+    notifyListeners();
+    await _settingsRepo.saveAppearance(themeMode, this.accent);
   }
 
   Future<void> setSortMode(SortMode mode) async {

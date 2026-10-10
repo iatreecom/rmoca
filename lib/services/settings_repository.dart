@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:flutter/material.dart' show ThemeMode, Color;
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -66,6 +68,23 @@ class SettingsRepository {
   Future<void> saveDrawingMode(DrawingMode mode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('drawingMode', mode.name);
+  }
+
+  Future<(ThemeMode, Color)> loadAppearance(Color fallback) async {
+    final prefs = await SharedPreferences.getInstance();
+    final mode =
+        ThemeMode.values
+            .where((m) => m.name == prefs.getString('themeMode'))
+            .firstOrNull ??
+        ThemeMode.system;
+    final accent = prefs.getInt('accent');
+    return (mode, accent == null ? fallback : Color(accent));
+  }
+
+  Future<void> saveAppearance(ThemeMode mode, Color accent) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('themeMode', mode.name);
+    await prefs.setInt('accent', accent.toARGB32());
   }
 
   Future<SortMode> loadSortMode() async {

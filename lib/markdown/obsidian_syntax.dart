@@ -150,7 +150,10 @@ class InlineMathBuilder extends MarkdownElementBuilder {
       child: Math.tex(
         element.textContent,
         mathStyle: MathStyle.text,
-        textStyle: parentStyle,
+        // Math defaults to black; follow the theme's text color.
+        textStyle: (parentStyle ?? const TextStyle()).copyWith(
+          color: parentStyle?.color ?? Theme.of(context).colorScheme.onSurface,
+        ),
         onErrorFallback: (e) =>
             Text('\$${element.textContent}\$', style: parentStyle),
       ),
@@ -173,7 +176,8 @@ class MathBlockView extends StatelessWidget {
         child: Math.tex(
           tex,
           mathStyle: MathStyle.display,
-          textStyle: Theme.of(context).textTheme.bodyLarge,
+          textStyle: Theme.of(context).textTheme.bodyLarge
+              ?.copyWith(color: Theme.of(context).colorScheme.onSurface),
           onErrorFallback: (e) => Text(
             tex,
             style: TextStyle(color: Theme.of(context).colorScheme.error),

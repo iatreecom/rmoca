@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 import 'package:rmoca/screens/navigation.dart';
+import 'package:rmoca/screens/settings_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -86,9 +87,15 @@ void main() {
     await gesture.up();
     await tester.pump();
 
-    // Leaving the screen flushes the pending save.
+    // Leaving the screen flushes the pending save. File I/O is real, so
+    // wait for it rather than for a fixed time (the suite runs in parallel).
     await tester.pumpWidget(wrap(const SizedBox()));
-    await settle(tester);
+    for (var i = 0; i < 100; i++) {
+      await settle(tester);
+      if (await tester.runAsync(() => app.store.exists('d.svg')) ?? false) {
+        break;
+      }
+    }
 
     final svg = await tester.runAsync(() => app.store.readText('d.svg'));
     final drawing = SvgCodec.decode(svg!)!;
@@ -103,13 +110,20 @@ void main() {
     await tester.runAsync(() async {
       await app.store.writeText(
         '아주 긴 이름의 메모 파일 제목입니다 정말로 깁니다.md',
-        '# 제목\n\n본문',
+        '---\ntags: [a, b]\nstatus: x\n---\n# 제목\n\n본문 #태그 [[링크]]\n\n> [!note] 콜아웃\n> 내용\n\n| a | b |\n| - | - |\n| 1 | 2 |\n',
       );
+      await app.store.createFolder('아주 긴 폴더 이름 테스트 폴더');
+      await app.store.writeText('지울 메모.md', 'x');
+      await app.store.moveToTrash('지울 메모.md');
       await app.refreshNotes();
     });
 
     for (final screen in <Widget>[
       const HomeScreen(),
+      const MarkdownScreen(path: '아주 긴 이름의 메모 파일 제목입니다 정말로 깁니다.md'),
+      const TrashScreen(),
+      const TagScreen(tag: 'a'),
+      const SettingsScreen(),
       const MarkdownScreen(
         path: '아주 긴 이름의 메모 파일 제목입니다 정말로 깁니다.md',
         startEditing: true,
