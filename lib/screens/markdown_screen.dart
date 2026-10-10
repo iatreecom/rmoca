@@ -8,6 +8,8 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../markdown/embedded_drawings.dart';
+import '../markdown/link_rewriter.dart';
 import '../models/note.dart';
 import '../widgets/sync_indicator.dart';
 import 'drawing_screen.dart';
@@ -18,10 +20,15 @@ class MarkdownScreen extends StatefulWidget {
     super.key,
     required this.path,
     this.startEditing = false,
+    this.openDrawingId,
   });
 
   final String path;
   final bool startEditing;
+
+  /// Opens the embedded-drawing editor for this `data-id` right away (used
+  /// when a drawing is created as a new memo).
+  final String? openDrawingId;
 
   @override
   State<MarkdownScreen> createState() => _MarkdownScreenState();
@@ -73,11 +80,16 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
       _text.selection = selection;
     }
     _text.addListener(_onChanged);
+    final first = _loading;
     setState(() {
       _loading = false;
       if (content.isEmpty) _editing = true;
     });
-    if (_editing) _focus.requestFocus();
+    if (first && widget.openDrawingId != null) {
+      _editEmbedded(widget.openDrawingId!, null);
+    } else if (_editing) {
+      _focus.requestFocus();
+    }
   }
 
   void _onChanged() {
@@ -140,42 +152,111 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
         .toList();
     final choice = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.add),
-              title: const Text('새 그림 그리기'),
-              onTap: () => Navigator.pop(context, ''),
-            ),
-            for (final d in drawings)
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.7,
+          ),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const ListTile(title: Text('새 그림')),
               ListTile(
-                leading: const Icon(Icons.brush_outlined),
-                title: Text(d.title),
-                subtitle: d.folder.isEmpty ? null : Text(d.folder),
-                onTap: () => Navigator.pop(context, d.path),
+                leading: const Icon(Icons.code),
+                title: const Text('메모 안에 넣기'),
+                subtitle: const Text('<svg> 코드를 이 .md 파일에 직접 넣습니다'),
+                onTap: () => Navigator.pop(context, ':embedded'),
               ),
-          ],
+              ListTile(
+                leading: const Icon(Icons.insert_drive_file_outlined),
+                title: const Text('SVG 파일로 저장'),
+                subtitle: const Text('별도 .svg 파일을 만들고 링크합니다'),
+                onTap: () => Navigator.pop(context, ':file'),
+              ),
+              if (drawings.isNotEmpty) ...[
+                const Divider(),
+                const ListTile(title: Text('기존 SVG 파일 링크')),
+                for (final d in drawings)
+                  ListTile(
+                    leading: const Icon(Icons.brush_outlined),
+                    title: Text(d.title),
+                    subtitle: d.folder.isEmpty ? null : Text(d.folder),
+                    onTap: () => Navigator.pop(context, d.path),
+                  ),
+              ],
+            ],
+          ),
         ),
       ),
     );
     if (choice == null || !mounted) return;
+    if (choice == ':embedded') {
+      _app.setDrawingMode(DrawingMode.embedded);
+      await _editEmbedded(EmbeddedDrawings.newId(), null);
+      return;
+    }
     var path = choice;
-    if (path.isEmpty) {
+    if (choice == ':file') {
+      _app.setDrawingMode(DrawingMode.file);
       path = await _app.newNotePath(
         '${p.posix.basenameWithoutExtension(widget.path)} 그림',
         'svg',
+        folder: _noteDir,
       );
       if (!mounted) return;
       await Navigator.of(context)
           .push(MaterialPageRoute(builder: (_) => DrawingScreen(path: path)));
       if (!await _app.store.exists(path)) return;
     }
-    final rel = p.posix.relative(path, from: _noteDir);
-    // `<...>` keeps names with spaces or Korean readable in the source.
-    final target = RegExp(r'[\s()<>]').hasMatch(rel) ? '<$rel>' : rel;
-    _wrap('![${p.posix.basenameWithoutExtension(path)}]($target)\n');
+    final rel = p.posix.relative(path, from: _noteDir.isEmpty ? '.' : _noteDir);
+    final name = p.posix.basenameWithoutExtension(path);
+    _wrap('![$name](${LinkRewriter.format(rel)})\n');
+  }
+
+  /// Opens the editor for the embedded drawing [id]; [svg] is its current
+  /// code, or null for a new drawing that is inserted at the cursor once
+  /// something is drawn.
+  Future<void> _editEmbedded(String id, String? svg) async {
+    final insertAt = _text.selection.isValid
+        ? _text.selection.start
+        : _text.text.length;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DrawingScreen.embedded(
+          embedId: id,
+          title: p.posix.basenameWithoutExtension(widget.path),
+          initialSvg: svg,
+          // The final save can come while the editor route is being torn
+          // down; apply it once the current frame is done.
+          onSave: (newSvg) => Future.microtask(() {
+            if (mounted) _putEmbedded(id, newSvg, insertAt);
+          }),
+        ),
+      ),
+    );
+  }
+
+  void _putEmbedded(String id, String svg, int insertAt) {
+    final text = _text.text;
+    final exists = EmbeddedDrawings.split(text)
+        .any((s) => s.isSvg && s.id == id);
+    if (exists) {
+      _text.text = EmbeddedDrawings.replace(text, id, svg);
+      return;
+    }
+    // New drawing: put it on its own lines after the cursor's line.
+    final lineEnd = text.indexOf('\n', insertAt.clamp(0, text.length));
+    final pos = lineEnd < 0 ? text.length : lineEnd;
+    final before = text.substring(0, pos);
+    final lead = before.isEmpty || before.endsWith('\n\n')
+        ? ''
+        : (before.endsWith('\n') ? '\n' : '\n\n');
+    final block = '$lead$svg\n';
+    _text.value = TextEditingValue(
+      text: before + block + text.substring(pos),
+      selection: TextSelection.collapsed(offset: pos + block.length),
+    );
   }
 
   String get _noteDir {
@@ -233,13 +314,29 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     );
   }
 
-  Widget _preview() => Markdown(
-    data: _text.text,
-    selectable: true,
-    padding: const EdgeInsets.all(20),
-    imageBuilder: _image,
-    onTapLink: _openLink,
-  );
+  Widget _preview() {
+    final segments = EmbeddedDrawings.split(_text.text)
+        .where((s) => s.isSvg || s.text!.trim().isNotEmpty)
+        .toList();
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        for (final s in segments)
+          if (s.isSvg)
+            _EmbeddedDrawingView(
+              svg: s.svg!,
+              onEdit: s.id == null ? null : () => _editEmbedded(s.id!, s.svg),
+            )
+          else
+            MarkdownBody(
+              data: s.text!,
+              selectable: true,
+              imageBuilder: _image,
+              onTapLink: _openLink,
+            ),
+      ],
+    );
+  }
 
   Widget _editor() => Column(
     children: [
@@ -350,6 +447,53 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
           body: SafeArea(top: false, child: body),
         );
       },
+    );
+  }
+}
+
+/// An inline `<svg>` drawing in the preview; tap to edit rmoca drawings.
+class _EmbeddedDrawingView extends StatelessWidget {
+  const _EmbeddedDrawingView({required this.svg, this.onEdit});
+
+  final String svg;
+  final VoidCallback? onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Material(
+        color: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onEdit,
+          child: Stack(
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 480),
+                child: Center(
+                  child: SvgPicture.string(
+                    svg,
+                    fit: BoxFit.contain,
+                    placeholderBuilder: (_) => const SizedBox(height: 48),
+                  ),
+                ),
+              ),
+              if (onEdit != null)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Icon(Icons.edit, size: 18, color: scheme.outline),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

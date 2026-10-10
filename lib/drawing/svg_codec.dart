@@ -32,7 +32,9 @@ class SvgCodec {
   /// Blank space kept around the ink when cropping.
   static const double margin = 24;
 
-  static String encode(Drawing d) {
+  /// Encodes [d] as a standalone `.svg` file, or with [embedId] as an
+  /// `<svg>` element (no XML declaration) to put inside a markdown note.
+  static String encode(Drawing d, {String? embedId}) {
     // Crop the visible area to the ink so thumbnails, embeds and GitHub show
     // the drawing rather than a mostly blank page. Coordinates are unchanged;
     // the page size is kept in data-page-* for editing.
@@ -45,7 +47,9 @@ class SvgCodec {
               .inflate(margin)
               .intersect(page);
     final b = XmlBuilder();
-    b.processing('xml', 'version="1.0" encoding="UTF-8"');
+    if (embedId == null) {
+      b.processing('xml', 'version="1.0" encoding="UTF-8"');
+    }
     b.element(
       'svg',
       attributes: {
@@ -55,6 +59,7 @@ class SvgCodec {
         'viewBox':
             '${_num(view.left)} ${_num(view.top)} ${_num(view.width)} ${_num(view.height)}',
         'data-generator': _marker,
+        'data-id': ?embedId,
         'data-page-width': _num(d.width),
         'data-page-height': _num(d.height),
       },

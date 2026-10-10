@@ -4,6 +4,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 
+import 'markdown/link_rewriter.dart';
 import 'models/note.dart';
 import 'models/sync_settings.dart';
 import 'services/github_remote.dart';
@@ -13,6 +14,15 @@ import 'services/settings_repository.dart';
 import 'services/sync_engine.dart';
 
 enum SyncStatus { notConfigured, idle, syncing, offline, error }
+
+/// How a new drawing is stored.
+enum DrawingMode {
+  /// Its own `.svg` file (linked from memos with `![](x.svg)`).
+  file,
+
+  /// Inline `<svg>` code inside a markdown memo.
+  embedded,
+}
 
 /// App-wide state: the note list, settings and background sync.
 ///
@@ -26,6 +36,10 @@ class AppState extends ChangeNotifier {
 
   SyncSettings settings = const SyncSettings();
   List<Note> notes = [];
+
+  /// Every folder, including empty ones ('a', 'a/b', ...).
+  List<String> folders = [];
+  DrawingMode drawingMode = DrawingMode.file;
   SyncStatus status = SyncStatus.notConfigured;
   String? lastError;
   DateTime? lastSync;
@@ -49,6 +63,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     settings = await _settingsRepo.load();
+    drawingMode = await _settingsRepo.loadDrawingMode();
     lastSync = (await store.loadState())?.lastSync;
     await refreshNotes();
     _updateIdleStatus();
@@ -112,7 +127,14 @@ class AppState extends ChangeNotifier {
 
   Future<void> refreshNotes() async {
     notes = await store.listNotes();
+    folders = await store.listFolders();
     notifyListeners();
+  }
+
+  Future<void> setDrawingMode(DrawingMode mode) async {
+    drawingMode = mode;
+    notifyListeners();
+    await _settingsRepo.saveDrawingMode(mode);
   }
 
   Future<void> updateSettings(SyncSettings next) async {
@@ -137,10 +159,73 @@ class AppState extends ChangeNotifier {
     _scheduleSync();
   }
 
+  /// Renames or moves a note, fixing links to and from it.
   Future<void> renameNote(String from, String to) async {
+    if (from == to) return;
     await store.rename(from, to);
+    await _afterMove({from: to});
+  }
+
+  // --- folders -------------------------------------------------------------
+
+  Future<String> createFolder(String parent, String name) async {
+    final path = Note.join(parent, sanitizeName(name, fallback: '새 폴더'));
+    await store.createFolder(path);
     await refreshNotes();
     _scheduleSync();
+    return path;
+  }
+
+  Future<void> deleteFolder(String folder) async {
+    await store.deleteFolder(folder);
+    await refreshNotes();
+    _scheduleSync();
+  }
+
+  /// Renames or moves a folder with everything in it, fixing links.
+  Future<void> moveFolder(String from, String to) async {
+    if (from == to) return;
+    final moves = await store.moveFolder(from, to);
+    await _afterMove(moves);
+  }
+
+  /// Notes directly inside [folder] ('' = root).
+  List<Note> notesIn(String folder) =>
+      notes.where((n) => n.folder == folder).toList();
+
+  /// Folders directly inside [folder] ('' = root).
+  List<String> subfolders(String folder) =>
+      folders.where((f) => Note.parentOf(f) == folder).toList();
+
+  /// Number of notes anywhere under [folder].
+  int countUnder(String folder) =>
+      notes.where((n) => Note.isWithin(folder, n.path)).length;
+
+  /// Rewrites relative links in every markdown note after [moves]
+  /// (old path -> new path) so images and links keep working.
+  Future<void> _afterMove(Map<String, String> moves) async {
+    final reverse = {for (final e in moves.entries) e.value: e.key};
+    for (final note in await store.listNotes()) {
+      if (note.kind != NoteKind.markdown) continue;
+      final content = await store.readText(note.path);
+      final updated = LinkRewriter.rewrite(
+        content,
+        oldPath: reverse[note.path] ?? note.path,
+        newPath: note.path,
+        moves: moves,
+      );
+      if (updated != content) await store.writeText(note.path, updated);
+    }
+    await refreshNotes();
+    _scheduleSync();
+  }
+
+  static String sanitizeName(String name, {String fallback = '메모'}) {
+    final safe = name
+        .trim()
+        .replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), '_')
+        .replaceAll(RegExp(r'^\.+'), '');
+    return safe.isEmpty ? fallback : safe;
   }
 
   Future<String> newNotePath(
@@ -148,12 +233,8 @@ class AppState extends ChangeNotifier {
     String extension, {
     String folder = '',
   }) {
-    final safe = name
-        .trim()
-        .replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), '_')
-        .replaceAll(RegExp(r'^\.+'), '');
-    final file = '${safe.isEmpty ? '메모' : safe}.$extension';
-    return store.uniquePath(folder.isEmpty ? file : '$folder/$file');
+    final file = '${sanitizeName(name)}.$extension';
+    return store.uniquePath(Note.join(folder, file));
   }
 
   // --- sync ----------------------------------------------------------------

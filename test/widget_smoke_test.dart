@@ -2,8 +2,12 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:perfect_freehand/perfect_freehand.dart';
 import 'package:rmoca/app_state.dart';
+import 'package:rmoca/drawing/stroke.dart';
 import 'package:rmoca/drawing/svg_codec.dart';
 import 'package:rmoca/screens/drawing_screen.dart';
 import 'package:rmoca/screens/home_screen.dart';
@@ -16,6 +20,7 @@ void main() {
   late AppState app;
 
   setUp(() async {
+    SharedPreferences.setMockInitialValues({});
     dir = await Directory.systemTemp.createTemp('rmoca_widget');
     final store = await LocalStore.openAt(dir);
     app = AppState(store, SettingsRepository());
@@ -49,7 +54,7 @@ void main() {
     await tester.pumpWidget(wrap(const HomeScreen()));
     await tester.pump();
     expect(find.text('hello'), findsOneWidget);
-    expect(find.text('새 메모'), findsOneWidget);
+    expect(find.text('새로 만들기'), findsOneWidget);
   });
 
   testWidgets('markdown note renders preview', (tester) async {
@@ -110,5 +115,48 @@ void main() {
       await settle(tester);
       expect(tester.takeException(), isNull, reason: '$screen');
     }
+  });
+
+  testWidgets('folders: browse into a folder and see its notes', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      await app.store.writeText('work/plan.md', '# plan\n\nship it');
+      await app.store.writeText('home.md', '# home');
+      await app.refreshNotes();
+    });
+    await tester.pumpWidget(wrap(const HomeScreen()));
+    await settle(tester);
+    expect(find.text('work'), findsWidgets);
+    expect(find.text('plan'), findsNothing);
+
+    await tester.tap(find.text('work').first);
+    await settle(tester);
+    expect(find.text('plan'), findsOneWidget);
+    expect(find.text('home'), findsNothing);
+  });
+
+  testWidgets('a drawing embedded in a memo renders in the preview', (
+    tester,
+  ) async {
+    final svg = SvgCodec.encode(
+      Drawing(
+        strokes: [
+          Stroke(
+            points: const [PointVector(10, 10), PointVector(60, 60)],
+            color: const Color(0xFF000000),
+            size: 4,
+          ),
+        ],
+      ),
+      embedId: 'd1',
+    );
+    await tester.runAsync(
+      () => app.store.writeText('e.md', '# e\n\ntext\n\n$svg\n'),
+    );
+    await tester.pumpWidget(wrap(const MarkdownScreen(path: 'e.md')));
+    await settle(tester);
+    expect(find.byType(SvgPicture), findsOneWidget);
+    expect(find.textContaining('<svg'), findsNothing);
   });
 }

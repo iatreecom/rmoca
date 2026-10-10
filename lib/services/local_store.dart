@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../markdown/embedded_drawings.dart';
 import '../models/note.dart';
 import 'git_hash.dart';
 
@@ -88,14 +89,88 @@ class LocalStore {
       final rel = _relative(entity.path);
       if (!Note.isNotePath(rel)) continue;
       final stat = await entity.stat();
-      final preview = Note.isDrawingPath(rel)
-          ? ''
-          : await _preview(entity, p.basenameWithoutExtension(entity.path));
-      notes.add(Note(path: rel, modified: stat.modified, preview: preview));
+      if (Note.isDrawingPath(rel)) {
+        notes.add(Note(path: rel, modified: stat.modified));
+        continue;
+      }
+      final text = await _readTextOrEmpty(entity);
+      notes.add(
+        Note(
+          path: rel,
+          modified: stat.modified,
+          preview: _preview(
+            EmbeddedDrawings.textOnly(text),
+            p.basenameWithoutExtension(entity.path),
+          ),
+          embeddedSvg: EmbeddedDrawings.firstSvg(text),
+        ),
+      );
     }
     notes.sort((a, b) => b.modified.compareTo(a.modified));
     return notes;
   }
+
+  /// Every folder under the notes root ('a', 'a/b', ...), sorted.
+  Future<List<String>> listFolders() async {
+    final folders = <String>[];
+    await for (final entity in notesDir.list(recursive: true)) {
+      if (entity is Directory) folders.add(_relative(entity.path));
+    }
+    return folders..sort(_compareNames);
+  }
+
+  /// Creates a folder that syncs even while empty (via a `.gitkeep`).
+  Future<void> createFolder(String folder) => lock.run(() async {
+    final dir = dirFor(folder);
+    if (await dir.exists()) {
+      throw FileSystemException(
+        'A folder with this name already exists',
+        folder,
+      );
+    }
+    await writeBytesUnlocked(Note.join(folder, Note.folderMarker), const []);
+  });
+
+  /// Deletes a folder and everything in it.
+  Future<void> deleteFolder(String folder) => lock.run(() async {
+    final dir = dirFor(folder);
+    if (await dir.exists()) await dir.delete(recursive: true);
+    await _pruneEmptyDirs(dir.parent);
+  });
+
+  /// Moves a folder; returns the old -> new path of every synced file in it.
+  Future<Map<String, String>> moveFolder(String from, String to) => lock.run(
+    () async {
+      if (Note.isWithin(from, to)) {
+        throw FileSystemException('Cannot move a folder into itself', to);
+      }
+      final source = dirFor(from);
+      final target = dirFor(to);
+      if (await target.exists()) {
+        throw FileSystemException('A folder with this name already exists', to);
+      }
+      final moves = <String, String>{};
+      await for (final entity in source.list(recursive: true)) {
+        if (entity is! File) continue;
+        final rel = _relative(entity.path);
+        if (Note.isSyncedPath(rel)) {
+          moves[rel] = '$to${rel.substring(from.length)}';
+        }
+      }
+      await target.parent.create(recursive: true);
+      await source.rename(target.path);
+      await _pruneEmptyDirs(source.parent);
+      return moves;
+    },
+  );
+
+  Directory dirFor(String folder) {
+    _checkPath(folder);
+    return Directory(p.joinAll([notesDir.path, ...folder.split('/')]));
+  }
+
+  static int _compareNames(String a, String b) =>
+      a.toLowerCase().compareTo(b.toLowerCase());
 
   /// Git blob SHA for every note file, used by the sync engine.
   Future<Map<String, String>> hashes() async {
@@ -103,7 +178,7 @@ class LocalStore {
     await for (final entity in notesDir.list(recursive: true)) {
       if (entity is! File) continue;
       final rel = _relative(entity.path);
-      if (!Note.isNotePath(rel)) continue;
+      if (!Note.isSyncedPath(rel)) continue;
       result[rel] = gitBlobSha(await entity.readAsBytes());
     }
     return result;
@@ -191,24 +266,23 @@ class LocalStore {
     }
   }
 
-  static Future<String> _preview(File file, String title) async {
+  static Future<String> _readTextOrEmpty(File file) async {
     try {
-      final text = await file.readAsString();
-      for (final line in const LineSplitter().convert(text)) {
-        final trimmed = line
-            .replaceFirst(RegExp(r'^[#>\-*+\s]+(\[[ xX]\]\s*)?'), '')
-            .trim();
-        // A heading that just repeats the file name adds nothing.
-        if (trimmed.isNotEmpty && !(line.startsWith('#') && trimmed == title)) {
-          return trimmed.length > 120
-              ? '${trimmed.substring(0, 120)}…'
-              : trimmed;
-        }
-      }
+      return await file.readAsString();
     } on FileSystemException {
-      // Unreadable or not UTF-8; show no preview.
-    } on FormatException {
-      // Not UTF-8.
+      return ''; // Unreadable or not UTF-8; show no preview.
+    }
+  }
+
+  static String _preview(String text, String title) {
+    for (final line in const LineSplitter().convert(text)) {
+      final trimmed = line
+          .replaceFirst(RegExp(r'^[#>\-*+\s]+(\[[ xX]\]\s*)?'), '')
+          .trim();
+      // A heading that just repeats the file name adds nothing.
+      if (trimmed.isNotEmpty && !(line.startsWith('#') && trimmed == title)) {
+        return trimmed.length > 120 ? '${trimmed.substring(0, 120)}…' : trimmed;
+      }
     }
     return '';
   }

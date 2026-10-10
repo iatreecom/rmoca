@@ -53,7 +53,7 @@ class GitHubRemote implements NoteRemote {
       final path = entry['path'] as String;
       if (!path.startsWith(_prefix)) continue;
       final rel = path.substring(_prefix.length);
-      if (Note.isNotePath(rel)) files[rel] = entry['sha'] as String;
+      if (Note.isSyncedPath(rel)) files[rel] = entry['sha'] as String;
     }
     return RemoteSnapshot(headCommit: head, files: files);
   }

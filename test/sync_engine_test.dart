@@ -204,4 +204,25 @@ void main() {
     final r = await engine.sync();
     expect(r.uploaded, isEmpty);
   });
+
+  test('empty folders sync through .gitkeep', () async {
+    await store.createFolder('work/ideas');
+    final r = await engine.sync();
+    expect(r.uploaded, ['work/ideas/.gitkeep']);
+    expect(remote.files.keys, contains('work/ideas/.gitkeep'));
+
+    await store.deleteFolder('work');
+    final r2 = await engine.sync();
+    expect(r2.deletedRemotely, ['work/ideas/.gitkeep']);
+  });
+
+  test('moving a folder syncs as delete + add', () async {
+    await store.writeText('a/note.md', 'x');
+    await engine.sync();
+    final moves = await store.moveFolder('a', 'b/a');
+    expect(moves, {'a/note.md': 'b/a/note.md'});
+    await engine.sync();
+    expect(remote.files.keys, ['b/a/note.md']);
+    expect(await store.listFolders(), ['b', 'b/a']);
+  });
 }

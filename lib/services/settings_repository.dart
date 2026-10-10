@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../app_state.dart' show DrawingMode;
 import '../models/sync_settings.dart';
 
 /// Keeps sync settings in shared preferences and the token in the OS
@@ -53,6 +54,18 @@ class SettingsRepository {
     } else {
       await _secure.write(key: _tokenKey, value: s.token);
     }
+  }
+
+  Future<DrawingMode> loadDrawingMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('drawingMode') == DrawingMode.embedded.name
+        ? DrawingMode.embedded
+        : DrawingMode.file;
+  }
+
+  Future<void> saveDrawingMode(DrawingMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('drawingMode', mode.name);
   }
 
   static String _defaultDeviceName() {
