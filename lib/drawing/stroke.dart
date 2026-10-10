@@ -25,13 +25,13 @@ class Stroke {
   Path? _path;
 
   StrokeOptions get options => StrokeOptions(
-        size: size,
-        thinning: 0.6,
-        smoothing: 0.5,
-        streamline: 0.5,
-        simulatePressure: simulatePressure,
-        isComplete: true,
-      );
+    size: size,
+    thinning: 0.6,
+    smoothing: 0.5,
+    streamline: 0.5,
+    simulatePressure: simulatePressure,
+    isComplete: true,
+  );
 
   List<Offset> get outline => _outline ??= getStroke(points, options: options);
 
@@ -70,7 +70,9 @@ class Stroke {
     for (var i = 0; i < pts.length; i++) {
       final a = pts[i];
       final n = pts[(i + 1) % pts.length];
-      b.write('Q${f(a.dx)},${f(a.dy)} ${f((a.dx + n.dx) / 2)},${f((a.dy + n.dy) / 2)}');
+      b.write(
+        'Q${f(a.dx)},${f(a.dy)} ${f((a.dx + n.dx) / 2)},${f((a.dy + n.dy) / 2)}',
+      );
     }
     b.write('Z');
     return b.toString();

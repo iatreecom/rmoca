@@ -57,6 +57,7 @@ flutter run -d macos  # 또는 windows / ios / android
 | iOS | `flutter build ipa` (Mac + Xcode, 서명 필요) |
 | Android | `flutter build apk` |
 | Windows | `flutter build windows` (Windows 필요) |
+| Linux | `flutter build linux` (개발·검증용) |
 
 ### 구조
 

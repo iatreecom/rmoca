@@ -26,15 +26,20 @@ void main() {
   /// Lets real file I/O complete and the UI catch up.
   Future<void> settle(WidgetTester tester) async {
     for (var i = 0; i < 5; i++) {
-      await tester.runAsync(() => Future.delayed(const Duration(milliseconds: 50)));
+      await tester.runAsync(
+        () => Future.delayed(const Duration(milliseconds: 50)),
+      );
       await tester.pump();
     }
   }
 
   Widget wrap(Widget child) => ChangeNotifierProvider.value(
-        value: app,
-        child: MaterialApp(home: child, routes: {'/settings': (_) => const SizedBox()}),
-      );
+    value: app,
+    child: MaterialApp(
+      home: child,
+      routes: {'/settings': (_) => const SizedBox()},
+    ),
+  );
 
   testWidgets('home lists notes', (tester) async {
     await tester.runAsync(() async {
@@ -48,7 +53,9 @@ void main() {
   });
 
   testWidgets('markdown note renders preview', (tester) async {
-    await tester.runAsync(() => app.store.writeText('a.md', '# Title\n\n**bold**'));
+    await tester.runAsync(
+      () => app.store.writeText('a.md', '# Title\n\n**bold**'),
+    );
     await tester.pumpWidget(wrap(const MarkdownScreen(path: 'a.md')));
     await settle(tester);
     expect(find.text('Title'), findsOneWidget);
@@ -77,5 +84,31 @@ void main() {
     final drawing = SvgCodec.decode(svg!)!;
     expect(drawing.strokes, hasLength(1));
     expect(drawing.strokes.first.points.length, greaterThan(5));
+  });
+
+  testWidgets('every screen fits a phone without overflow', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.runAsync(() async {
+      await app.store.writeText(
+        '아주 긴 이름의 메모 파일 제목입니다 정말로 깁니다.md',
+        '# 제목\n\n본문',
+      );
+      await app.refreshNotes();
+    });
+
+    for (final screen in <Widget>[
+      const HomeScreen(),
+      const MarkdownScreen(
+        path: '아주 긴 이름의 메모 파일 제목입니다 정말로 깁니다.md',
+        startEditing: true,
+      ),
+      const DrawingScreen(path: 'phone.svg'),
+    ]) {
+      await tester.pumpWidget(wrap(screen));
+      await settle(tester);
+      expect(tester.takeException(), isNull, reason: '$screen');
+    }
   });
 }

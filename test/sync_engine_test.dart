@@ -90,8 +90,10 @@ void main() {
 
   test('git blob sha matches git hash-object', () {
     // `printf 'hello\n' | git hash-object --stdin`
-    expect(gitBlobSha(Uint8List.fromList(utf8.encode('hello\n'))),
-        'ce013625030ba8dba906f756967f9e9ca394464a');
+    expect(
+      gitBlobSha(Uint8List.fromList(utf8.encode('hello\n'))),
+      'ce013625030ba8dba906f756967f9e9ca394464a',
+    );
   });
 
   test('uploads new local notes and downloads new remote ones', () async {
@@ -185,14 +187,16 @@ void main() {
     expect(await store.readText('other.md'), 'pushed meanwhile');
   });
 
-  test('identical content on both sides without history is not a conflict',
-      () async {
-    await store.writeText('a.md', 'same');
-    remote.put('a.md', 'same');
-    final r = await engine.sync();
-    expect(r.hasChanges, isFalse);
-    expect(r.conflicts, isEmpty);
-  });
+  test(
+    'identical content on both sides without history is not a conflict',
+    () async {
+      await store.writeText('a.md', 'same');
+      remote.put('a.md', 'same');
+      final r = await engine.sync();
+      expect(r.hasChanges, isFalse);
+      expect(r.conflicts, isEmpty);
+    },
+  );
 
   test('ignores non-note files', () async {
     remote.put('a.md', 'x');

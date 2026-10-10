@@ -100,23 +100,28 @@ class _DrawingScreenState extends State<DrawingScreen> {
   Widget build(BuildContext context) {
     final title = widget.path.split('/').last.replaceAll(RegExp(r'\.svg$'), '');
     if (_loading) {
-      return Scaffold(appBar: AppBar(title: Text(title)), body: const Center(child: CircularProgressIndicator()));
+      return Scaffold(
+        appBar: AppBar(title: Text(title)),
+        body: const Center(child: CircularProgressIndicator()),
+      );
     }
     if (_foreignSvg != null) {
       return Scaffold(
         appBar: AppBar(title: Text(title), actions: const [SyncIndicator()]),
-        body: Column(children: [
-          const MaterialBanner(
-            content: Text('다른 프로그램에서 만든 SVG라 보기만 가능합니다.'),
-            actions: [SizedBox.shrink()],
-          ),
-          Expanded(
-            child: InteractiveViewer(
-              maxScale: 8,
-              child: Center(child: SvgPicture.string(_foreignSvg!)),
+        body: Column(
+          children: [
+            const MaterialBanner(
+              content: Text('다른 프로그램에서 만든 SVG라 보기만 가능합니다.'),
+              actions: [SizedBox.shrink()],
             ),
-          ),
-        ]),
+            Expanded(
+              child: InteractiveViewer(
+                maxScale: 8,
+                child: Center(child: SvgPicture.string(_foreignSvg!)),
+              ),
+            ),
+          ],
+        ),
       );
     }
 
@@ -125,8 +130,13 @@ class _DrawingScreenState extends State<DrawingScreen> {
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyZ, control: true): c.undo,
         const SingleActivator(LogicalKeyboardKey.keyZ, meta: true): c.undo,
-        const SingleActivator(LogicalKeyboardKey.keyZ, control: true, shift: true): c.redo,
-        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true, shift: true): c.redo,
+        const SingleActivator(
+          LogicalKeyboardKey.keyZ,
+          control: true,
+          shift: true,
+        ): c.redo,
+        const SingleActivator(LogicalKeyboardKey.keyZ, meta: true, shift: true):
+            c.redo,
       },
       child: Focus(
         autofocus: true,
@@ -136,18 +146,30 @@ class _DrawingScreenState extends State<DrawingScreen> {
             actions: [
               ListenableBuilder(
                 listenable: c,
-                builder: (context, _) => Row(children: [
-                  IconButton(
-                    tooltip: '실행 취소',
-                    icon: const Icon(Icons.undo),
-                    onPressed: c.canUndo ? () { c.undo(); _onCommitted(); } : null,
-                  ),
-                  IconButton(
-                    tooltip: '다시 실행',
-                    icon: const Icon(Icons.redo),
-                    onPressed: c.canRedo ? () { c.redo(); _onCommitted(); } : null,
-                  ),
-                ]),
+                builder: (context, _) => Row(
+                  children: [
+                    IconButton(
+                      tooltip: '실행 취소',
+                      icon: const Icon(Icons.undo),
+                      onPressed: c.canUndo
+                          ? () {
+                              c.undo();
+                              _onCommitted();
+                            }
+                          : null,
+                    ),
+                    IconButton(
+                      tooltip: '다시 실행',
+                      icon: const Icon(Icons.redo),
+                      onPressed: c.canRedo
+                          ? () {
+                              c.redo();
+                              _onCommitted();
+                            }
+                          : null,
+                    ),
+                  ],
+                ),
               ),
               PopupMenuButton<String>(
                 onSelected: (v) async {
@@ -170,21 +192,26 @@ class _DrawingScreenState extends State<DrawingScreen> {
               const SyncIndicator(),
             ],
           ),
-          body: Column(children: [
-            _Toolbar(controller: c),
-            const Divider(height: 1),
-            Expanded(
-              child: ColoredBox(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1000),
-                    child: DrawingCanvas(controller: c, onCommitted: _onCommitted),
+          body: Column(
+            children: [
+              _Toolbar(controller: c),
+              const Divider(height: 1),
+              Expanded(
+                child: ColoredBox(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1000),
+                      child: DrawingCanvas(
+                        controller: c,
+                        onCommitted: _onCommitted,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ]),
+            ],
+          ),
         ),
       ),
     );
@@ -204,55 +231,75 @@ class _Toolbar extends StatelessWidget {
       builder: (context, _) => SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        child: Row(children: [
-          SegmentedButton<DrawTool>(
-            showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: DrawTool.pen, icon: Icon(Icons.edit), tooltip: '펜'),
-              ButtonSegment(value: DrawTool.eraser, icon: Icon(Icons.auto_fix_normal), tooltip: '지우개'),
-              ButtonSegment(value: DrawTool.hand, icon: Icon(Icons.pan_tool_outlined), tooltip: '이동'),
-            ],
-            selected: {c.tool},
-            onSelectionChanged: (s) => c.setTool(s.first),
-          ),
-          const SizedBox(width: 12),
-          for (final color in _palette)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: () => c.setColor(color),
-                child: Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 1),
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      width: c.color == color && c.tool == DrawTool.pen ? 3 : 1,
-                      color: c.color == color && c.tool == DrawTool.pen
-                          ? Theme.of(context).colorScheme.primary
-                          : Colors.black26,
+        child: Row(
+          children: [
+            SegmentedButton<DrawTool>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(
+                  value: DrawTool.pen,
+                  icon: Icon(Icons.edit),
+                  tooltip: '펜',
+                ),
+                ButtonSegment(
+                  value: DrawTool.eraser,
+                  icon: Icon(Icons.auto_fix_normal),
+                  tooltip: '지우개',
+                ),
+                ButtonSegment(
+                  value: DrawTool.hand,
+                  icon: Icon(Icons.pan_tool_outlined),
+                  tooltip: '이동',
+                ),
+              ],
+              selected: {c.tool},
+              onSelectionChanged: (s) => c.setTool(s.first),
+            ),
+            const SizedBox(width: 12),
+            for (final color in _palette)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 3),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => c.setColor(color),
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 1),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        width: c.color == color && c.tool == DrawTool.pen
+                            ? 3
+                            : 1,
+                        color: c.color == color && c.tool == DrawTool.pen
+                            ? Theme.of(context).colorScheme.primary
+                            : Colors.black26,
+                      ),
                     ),
+                    child: color.a < 1
+                        ? const Icon(
+                            Icons.highlight,
+                            size: 16,
+                            color: Colors.black54,
+                          )
+                        : null,
                   ),
-                  child: color.a < 1
-                      ? const Icon(Icons.highlight, size: 16, color: Colors.black54)
-                      : null,
                 ),
               ),
+            const SizedBox(width: 12),
+            const Icon(Icons.line_weight, size: 20),
+            SizedBox(
+              width: 140,
+              child: Slider(
+                value: c.size,
+                min: 2,
+                max: 32,
+                onChanged: c.setSize,
+              ),
             ),
-          const SizedBox(width: 12),
-          const Icon(Icons.line_weight, size: 20),
-          SizedBox(
-            width: 140,
-            child: Slider(
-              value: c.size,
-              min: 2,
-              max: 32,
-              onChanged: c.setSize,
-            ),
-          ),
-        ]),
+          ],
+        ),
       ),
     );
   }

@@ -20,11 +20,13 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   String _query = '';
 
-  Future<void> _open(Note note) => Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => note.kind == NoteKind.drawing
-            ? DrawingScreen(path: note.path)
-            : MarkdownScreen(path: note.path),
-      ));
+  Future<void> _open(Note note) => Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => note.kind == NoteKind.drawing
+          ? DrawingScreen(path: note.path)
+          : MarkdownScreen(path: note.path),
+    ),
+  );
 
   Future<void> _create(NoteKind kind) async {
     final app = context.read<AppState>();
@@ -37,14 +39,19 @@ class _HomeScreenState extends State<HomeScreen> {
     final ext = kind == NoteKind.drawing ? 'svg' : 'md';
     final path = await app.newNotePath(name, ext);
     if (kind == NoteKind.markdown) {
-      await app.saveText(path, '# ${p.posix.basenameWithoutExtension(path)}\n\n');
+      await app.saveText(
+        path,
+        '# ${p.posix.basenameWithoutExtension(path)}\n\n',
+      );
     }
     if (!mounted) return;
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => kind == NoteKind.drawing
-          ? DrawingScreen(path: path)
-          : MarkdownScreen(path: path, startEditing: true),
-    ));
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => kind == NoteKind.drawing
+            ? DrawingScreen(path: path)
+            : MarkdownScreen(path: path, startEditing: true),
+      ),
+    );
   }
 
   Future<String?> _askName({required String title, required String initial}) {
@@ -61,10 +68,14 @@ class _HomeScreenState extends State<HomeScreen> {
           onSubmitted: (v) => Navigator.pop(context, v),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('취소'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, controller.text),
-              child: const Text('확인')),
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('확인'),
+          ),
         ],
       ),
     );
@@ -80,7 +91,8 @@ class _HomeScreenState extends State<HomeScreen> {
       await app.renameNote(note.path, target);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('이름을 바꿀 수 없습니다: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('이름을 바꿀 수 없습니다: $e')));
       }
     }
   }
@@ -92,12 +104,20 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('메모 삭제'),
         content: Text("'${note.title}'을(를) 삭제할까요? 동기화되면 저장소에서도 삭제됩니다."),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('삭제')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('삭제'),
+          ),
         ],
       ),
     );
-    if (ok == true && mounted) await context.read<AppState>().deleteNote(note.path);
+    if (ok == true && mounted) {
+      await context.read<AppState>().deleteNote(note.path);
+    }
   }
 
   @override
@@ -107,8 +127,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final notes = q.isEmpty
         ? app.notes
         : app.notes
-            .where((n) => n.path.toLowerCase().contains(q) || n.preview.toLowerCase().contains(q))
-            .toList();
+              .where(
+                (n) =>
+                    n.path.toLowerCase().contains(q) ||
+                    n.preview.toLowerCase().contains(q),
+              )
+              .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -137,26 +161,35 @@ class _HomeScreenState extends State<HomeScreen> {
       body: RefreshIndicator(
         onRefresh: () => app.syncNow(),
         child: notes.isEmpty
-            ? ListView(children: [
-                const SizedBox(height: 120),
-                Icon(Icons.sticky_note_2_outlined,
-                    size: 64, color: Theme.of(context).colorScheme.outline),
-                const SizedBox(height: 12),
-                Center(child: Text(_query.isEmpty ? '아직 메모가 없습니다' : '검색 결과가 없습니다')),
-                if (!app.settings.isConfigured) ...[
+            ? ListView(
+                children: [
+                  const SizedBox(height: 120),
+                  Icon(
+                    Icons.sticky_note_2_outlined,
+                    size: 64,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
                   const SizedBox(height: 12),
                   Center(
-                    child: TextButton.icon(
-                      icon: const Icon(Icons.link),
-                      label: const Text('Git 저장소 연결하기'),
-                      onPressed: () => Navigator.of(context).pushNamed('/settings'),
-                    ),
+                    child: Text(_query.isEmpty ? '아직 메모가 없습니다' : '검색 결과가 없습니다'),
                   ),
+                  if (!app.settings.isConfigured) ...[
+                    const SizedBox(height: 12),
+                    Center(
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.link),
+                        label: const Text('Git 저장소 연결하기'),
+                        onPressed: () =>
+                            Navigator.of(context).pushNamed('/settings'),
+                      ),
+                    ),
+                  ],
                 ],
-              ])
+              )
             : ListView.separated(
                 itemCount: notes.length,
-                separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
+                separatorBuilder: (_, _) =>
+                    const Divider(height: 1, indent: 72),
                 itemBuilder: (context, i) => _NoteTile(
                   note: notes[i],
                   onTap: () => _open(notes[i]),
@@ -213,9 +246,10 @@ class _NoteTile extends StatelessWidget {
               color: Colors.white,
               child: SvgPicture.file(
                 app.store.fileFor(note.path),
-                key: ValueKey('${note.path}@${note.modified.millisecondsSinceEpoch}'),
-                fit: BoxFit.cover,
-                alignment: Alignment.topCenter,
+                key: ValueKey(
+                  '${note.path}@${note.modified.millisecondsSinceEpoch}',
+                ),
+                fit: BoxFit.contain,
                 placeholderBuilder: (_) => const Icon(Icons.brush_outlined),
               ),
             ),
@@ -246,26 +280,29 @@ class _NoteTile extends StatelessWidget {
   }
 
   void _menu(BuildContext context) => showModalBottomSheet<void>(
-        context: context,
-        builder: (context) => SafeArea(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            ListTile(
-              leading: const Icon(Icons.drive_file_rename_outline),
-              title: const Text('이름 바꾸기'),
-              onTap: () {
-                Navigator.pop(context);
-                onRename();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('삭제'),
-              onTap: () {
-                Navigator.pop(context);
-                onDelete();
-              },
-            ),
-          ]),
-        ),
-      );
+    context: context,
+    builder: (context) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.drive_file_rename_outline),
+            title: const Text('이름 바꾸기'),
+            onTap: () {
+              Navigator.pop(context);
+              onRename();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete_outline),
+            title: const Text('삭제'),
+            onTap: () {
+              Navigator.pop(context);
+              onDelete();
+            },
+          ),
+        ],
+      ),
+    ),
+  );
 }

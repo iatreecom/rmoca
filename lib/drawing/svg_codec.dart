@@ -7,7 +7,11 @@ import 'stroke.dart';
 
 /// A drawing page: fixed width, height grows as you draw further down.
 class Drawing {
-  Drawing({required this.strokes, this.width = defaultWidth, this.height = defaultHeight});
+  Drawing({
+    required this.strokes,
+    this.width = defaultWidth,
+    this.height = defaultHeight,
+  });
 
   static const double defaultWidth = 1000;
   static const double defaultHeight = 1400;
@@ -25,35 +29,66 @@ class Drawing {
 class SvgCodec {
   static const _marker = 'rmoca-drawing';
 
+  /// Blank space kept around the ink when cropping.
+  static const double margin = 24;
+
   static String encode(Drawing d) {
+    // Crop the visible area to the ink so thumbnails, embeds and GitHub show
+    // the drawing rather than a mostly blank page. Coordinates are unchanged;
+    // the page size is kept in data-page-* for editing.
+    final page = Rect.fromLTWH(0, 0, d.width, d.height);
+    final view = d.strokes.isEmpty
+        ? page
+        : d.strokes
+              .map((s) => s.bounds)
+              .reduce((a, b) => a.expandToInclude(b))
+              .inflate(margin)
+              .intersect(page);
     final b = XmlBuilder();
     b.processing('xml', 'version="1.0" encoding="UTF-8"');
-    b.element('svg', attributes: {
-      'xmlns': 'http://www.w3.org/2000/svg',
-      'width': _num(d.width),
-      'height': _num(d.height),
-      'viewBox': '0 0 ${_num(d.width)} ${_num(d.height)}',
-      'data-generator': _marker,
-    }, nest: () {
-      b.element('rect', attributes: {
-        'width': '100%',
-        'height': '100%',
-        'fill': '#ffffff',
-      });
-      for (final s in d.strokes) {
-        b.element('path', attributes: {
-          'd': s.svgPathData(),
-          'fill': _hex(s.color),
-          if (s.color.a < 1) 'fill-opacity': s.color.a.toStringAsFixed(3),
-          'data-size': _num(s.size),
-          if (s.simulatePressure) 'data-simulate-pressure': 'true',
-          'data-points': s.points
-              .map((p) =>
-                  '${_num(p.x)},${_num(p.y)},${(p.pressure ?? 0.5).toStringAsFixed(2)}')
-              .join(' '),
-        });
-      }
-    });
+    b.element(
+      'svg',
+      attributes: {
+        'xmlns': 'http://www.w3.org/2000/svg',
+        'width': _num(view.width),
+        'height': _num(view.height),
+        'viewBox':
+            '${_num(view.left)} ${_num(view.top)} ${_num(view.width)} ${_num(view.height)}',
+        'data-generator': _marker,
+        'data-page-width': _num(d.width),
+        'data-page-height': _num(d.height),
+      },
+      nest: () {
+        b.element(
+          'rect',
+          attributes: {
+            'x': _num(view.left),
+            'y': _num(view.top),
+            'width': _num(view.width),
+            'height': _num(view.height),
+            'fill': '#ffffff',
+          },
+        );
+        for (final s in d.strokes) {
+          b.element(
+            'path',
+            attributes: {
+              'd': s.svgPathData(),
+              'fill': _hex(s.color),
+              if (s.color.a < 1) 'fill-opacity': s.color.a.toStringAsFixed(3),
+              'data-size': _num(s.size),
+              if (s.simulatePressure) 'data-simulate-pressure': 'true',
+              'data-points': s.points
+                  .map(
+                    (p) =>
+                        '${_num(p.x)},${_num(p.y)},${(p.pressure ?? 0.5).toStringAsFixed(2)}',
+                  )
+                  .join(' '),
+            },
+          );
+        }
+      },
+    );
     return b.buildDocument().toXmlString(pretty: true, indent: '  ');
   }
 
@@ -67,7 +102,8 @@ class SvgCodec {
       return null;
     }
     final root = doc.rootElement;
-    if (root.name.local != 'svg' || root.getAttribute('data-generator') != _marker) {
+    if (root.name.local != 'svg' ||
+        root.getAttribute('data-generator') != _marker) {
       return null;
     }
     final strokes = <Stroke>[];
@@ -84,19 +120,25 @@ class SvgCodec {
       var color = _parseHex(el.getAttribute('fill')) ?? const Color(0xFF000000);
       final opacity = double.tryParse(el.getAttribute('fill-opacity') ?? '');
       if (opacity != null) color = color.withValues(alpha: opacity);
-      strokes.add(Stroke(
-        points: points,
-        color: color,
-        size: double.tryParse(el.getAttribute('data-size') ?? '') ?? 4,
-        simulatePressure: el.getAttribute('data-simulate-pressure') == 'true',
-      ));
+      strokes.add(
+        Stroke(
+          points: points,
+          color: color,
+          size: double.tryParse(el.getAttribute('data-size') ?? '') ?? 4,
+          simulatePressure: el.getAttribute('data-simulate-pressure') == 'true',
+        ),
+      );
     }
     return Drawing(
       strokes: strokes,
-      width: double.tryParse(root.getAttribute('width') ?? '') ?? Drawing.defaultWidth,
-      height: double.tryParse(root.getAttribute('height') ?? '') ?? Drawing.defaultHeight,
+      width: _attr(root, 'data-page-width', 'width') ?? Drawing.defaultWidth,
+      height:
+          _attr(root, 'data-page-height', 'height') ?? Drawing.defaultHeight,
     );
   }
+
+  static double? _attr(XmlElement el, String name, String fallback) =>
+      double.tryParse(el.getAttribute(name) ?? el.getAttribute(fallback) ?? '');
 
   static String _num(double v) {
     final s = v.toStringAsFixed(1);
@@ -104,7 +146,8 @@ class SvgCodec {
   }
 
   static String _hex(Color c) {
-    String h(double v) => (v * 255).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
+    String h(double v) =>
+        (v * 255).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
     return '#${h(c.r)}${h(c.g)}${h(c.b)}';
   }
 

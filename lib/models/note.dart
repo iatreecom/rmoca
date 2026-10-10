@@ -13,7 +13,8 @@ class Note {
   /// First meaningful line of a markdown note (empty for drawings).
   final String preview;
 
-  NoteKind get kind => isDrawingPath(path) ? NoteKind.drawing : NoteKind.markdown;
+  NoteKind get kind =>
+      isDrawingPath(path) ? NoteKind.drawing : NoteKind.markdown;
 
   String get title => p.posix.basenameWithoutExtension(path);
 

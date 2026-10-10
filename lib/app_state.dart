@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
+import 'package:path/path.dart' as p;
 
 import 'models/note.dart';
 import 'models/sync_settings.dart';
@@ -34,6 +35,10 @@ class AppState extends ChangeNotifier {
       StreamController.broadcast();
   Stream<Set<String>> get externalChanges => _externalChanges.stream;
 
+  /// Things the user should notice (conflicts, auth problems), shown once.
+  final StreamController<String> _messages = StreamController.broadcast();
+  Stream<String> get messages => _messages.stream;
+
   Timer? _debounce;
   Timer? _periodic;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
@@ -48,27 +53,50 @@ class AppState extends ChangeNotifier {
     await refreshNotes();
     _updateIdleStatus();
 
-    try {
-      final initial = await Connectivity().checkConnectivity();
-      _online = !initial.contains(ConnectivityResult.none);
-    } catch (_) {
-      _online = true;
-    }
-    _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
-      final online = !results.contains(ConnectivityResult.none);
-      final cameOnline = online && !_online;
-      _online = online;
-      if (!online && status != SyncStatus.syncing) {
-        status = settings.isConfigured ? SyncStatus.offline : status;
-        notifyListeners();
-      }
-      if (cameOnline) syncNow(auto: true);
-    });
+    _watchConnectivity();
     _lifecycle = AppLifecycleListener(onResume: () => syncNow(auto: true));
     _periodic = Timer.periodic(
-        const Duration(minutes: 3), (_) => syncNow(auto: true));
+      const Duration(minutes: 3),
+      (_) => syncNow(auto: true),
+    );
 
     syncNow(auto: true);
+  }
+
+  /// Tracks network changes to sync as soon as we're back online.
+  ///
+  /// Connectivity is only a hint: if the platform service is missing or
+  /// misbehaves we assume online and let failed syncs report offline. The
+  /// plugin can throw from internal streams, hence the guarded zone.
+  void _watchConnectivity() {
+    runZonedGuarded(() async {
+      final connectivity = Connectivity();
+      try {
+        final initial = await connectivity.checkConnectivity().timeout(
+          const Duration(seconds: 3),
+        );
+        _online = !initial.contains(ConnectivityResult.none);
+        _updateIdleStatus();
+        notifyListeners();
+      } catch (_) {
+        // Keep assuming online.
+      }
+      _connectivitySub = connectivity.onConnectivityChanged.listen(
+        _onConnectivity,
+        onError: (Object _) {},
+      );
+    }, (error, _) => debugPrint('connectivity unavailable: $error'));
+  }
+
+  void _onConnectivity(List<ConnectivityResult> results) {
+    final online = !results.contains(ConnectivityResult.none);
+    final cameOnline = online && !_online;
+    _online = online;
+    if (!online && status != SyncStatus.syncing) {
+      status = settings.isConfigured ? SyncStatus.offline : status;
+      notifyListeners();
+    }
+    if (cameOnline) syncNow(auto: true);
   }
 
   @override
@@ -78,6 +106,7 @@ class AppState extends ChangeNotifier {
     _connectivitySub?.cancel();
     _lifecycle?.dispose();
     _externalChanges.close();
+    _messages.close();
     super.dispose();
   }
 
@@ -114,7 +143,11 @@ class AppState extends ChangeNotifier {
     _scheduleSync();
   }
 
-  Future<String> newNotePath(String name, String extension, {String folder = ''}) {
+  Future<String> newNotePath(
+    String name,
+    String extension, {
+    String folder = '',
+  }) {
     final safe = name
         .trim()
         .replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), '_')
@@ -164,6 +197,7 @@ class AppState extends ChangeNotifier {
       targetKey: settings.targetKey,
       deviceName: settings.deviceName,
     );
+    final previousError = lastError;
     try {
       final result = await engine.sync();
       lastSync = DateTime.now();
@@ -175,10 +209,16 @@ class AppState extends ChangeNotifier {
       }
       if (result.conflicts.isNotEmpty) {
         lastError = '충돌 ${result.conflicts.length}건: 로컬 수정본을 별도 메모로 저장했습니다.';
+        final names = result.conflicts
+            .map((c) => p.posix.basenameWithoutExtension(c))
+            .join(', ');
+        _messages.add('다른 기기에서도 수정된 메모가 있어 이 기기의 내용을 따로 저장했습니다: $names');
       }
     } on RemoteException catch (e) {
       lastError = e.message;
       status = SyncStatus.error;
+      // Auto sync retries often; only surface a problem when it changes.
+      if (e.message != previousError) _messages.add('동기화 오류: ${e.message}');
     } on RemoteConflictException {
       lastError = '다른 기기와 동시에 저장되었습니다. 잠시 후 다시 시도합니다.';
       status = SyncStatus.error;

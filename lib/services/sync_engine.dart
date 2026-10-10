@@ -54,16 +54,16 @@ class SyncEngine {
   static const _maxAttempts = 3;
 
   Future<SyncResult> sync() => store.lock.run(() async {
-        for (var attempt = 1;; attempt++) {
-          try {
-            return await _syncOnce();
-          } on RemoteConflictException {
-            // Someone else pushed between our snapshot and commit. Downloads
-            // already written match the remote, so simply run again.
-            if (attempt >= _maxAttempts) rethrow;
-          }
-        }
-      });
+    for (var attempt = 1; ; attempt++) {
+      try {
+        return await _syncOnce();
+      } on RemoteConflictException {
+        // Someone else pushed between our snapshot and commit. Downloads
+        // already written match the remote, so simply run again.
+        if (attempt >= _maxAttempts) rethrow;
+      }
+    }
+  });
 
   Future<SyncResult> _syncOnce() async {
     final result = SyncResult();
@@ -131,7 +131,10 @@ class SyncEngine {
         result.uploaded.add(path);
       } else {
         final localBytes = await store.readBytes(path);
-        final copy = await _conflictPath(path, {...local.keys, ...remoteFiles.keys});
+        final copy = await _conflictPath(path, {
+          ...local.keys,
+          ...remoteFiles.keys,
+        });
         await store.writeBytesUnlocked(copy, localBytes);
         await _download(path, r);
         changes.add(RemoteChange.put(copy, localBytes));
@@ -152,7 +155,8 @@ class SyncEngine {
     }
 
     await store.saveState(
-        SyncState(targetKey: targetKey, base: newBase, lastSync: _clock()));
+      SyncState(targetKey: targetKey, base: newBase, lastSync: _clock()),
+    );
     return result;
   }
 
@@ -170,7 +174,7 @@ class SyncEngine {
     final ext = p.posix.extension(path);
     final stamp = DateFormat('yyyy-MM-dd HH.mm').format(_clock());
     final device = deviceName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-    for (var i = 1;; i++) {
+    for (var i = 1; ; i++) {
       final suffix = i == 1 ? '' : ' $i';
       final file = '$name (충돌 $device $stamp$suffix)$ext';
       final candidate = dir == '.' ? file : '$dir/$file';

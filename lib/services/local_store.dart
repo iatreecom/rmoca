@@ -36,18 +36,18 @@ class SyncState {
       SyncState(targetKey: targetKey, base: {});
 
   Map<String, Object?> toJson() => {
-        'targetKey': targetKey,
-        'base': base,
-        'lastSync': lastSync?.toIso8601String(),
-      };
+    'targetKey': targetKey,
+    'base': base,
+    'lastSync': lastSync?.toIso8601String(),
+  };
 
   factory SyncState.fromJson(Map<String, Object?> json) => SyncState(
-        targetKey: json['targetKey'] as String? ?? '',
-        base: Map<String, String>.from(json['base'] as Map? ?? const {}),
-        lastSync: json['lastSync'] == null
-            ? null
-            : DateTime.tryParse(json['lastSync'] as String),
-      );
+    targetKey: json['targetKey'] as String? ?? '',
+    base: Map<String, String>.from(json['base'] as Map? ?? const {}),
+    lastSync: json['lastSync'] == null
+        ? null
+        : DateTime.tryParse(json['lastSync'] as String),
+  );
 }
 
 /// Notes live as plain `.md` / `.svg` files in the app support directory, so
@@ -88,7 +88,9 @@ class LocalStore {
       final rel = _relative(entity.path);
       if (!Note.isNotePath(rel)) continue;
       final stat = await entity.stat();
-      final preview = Note.isDrawingPath(rel) ? '' : await _preview(entity);
+      final preview = Note.isDrawingPath(rel)
+          ? ''
+          : await _preview(entity, p.basenameWithoutExtension(entity.path));
       notes.add(Note(path: rel, modified: stat.modified, preview: preview));
     }
     notes.sort((a, b) => b.modified.compareTo(a.modified));
@@ -120,14 +122,14 @@ class LocalStore {
   Future<void> delete(String path) => lock.run(() => deleteUnlocked(path));
 
   Future<void> rename(String from, String to) => lock.run(() async {
-        final target = fileFor(to);
-        if (await target.exists()) {
-          throw FileSystemException('A note with this name already exists', to);
-        }
-        await target.parent.create(recursive: true);
-        await fileFor(from).rename(target.path);
-        await _pruneEmptyDirs(fileFor(from).parent);
-      });
+    final target = fileFor(to);
+    if (await target.exists()) {
+      throw FileSystemException('A note with this name already exists', to);
+    }
+    await target.parent.create(recursive: true);
+    await fileFor(from).rename(target.path);
+    await _pruneEmptyDirs(fileFor(from).parent);
+  });
 
   /// Writes without taking [lock]; only for callers already holding it.
   Future<void> writeBytesUnlocked(String path, List<int> bytes) async {
@@ -167,9 +169,11 @@ class LocalStore {
     final dir = p.posix.dirname(path);
     final base = p.posix.basenameWithoutExtension(path);
     final ext = p.posix.extension(path);
-    for (var i = 2;; i++) {
+    for (var i = 2; ; i++) {
       final candidate = p.posix.join(dir, '$base $i$ext');
-      final normalized = candidate.startsWith('./') ? candidate.substring(2) : candidate;
+      final normalized = candidate.startsWith('./')
+          ? candidate.substring(2)
+          : candidate;
       if (!await exists(normalized)) return normalized;
     }
   }
@@ -187,13 +191,18 @@ class LocalStore {
     }
   }
 
-  static Future<String> _preview(File file) async {
+  static Future<String> _preview(File file, String title) async {
     try {
       final text = await file.readAsString();
       for (final line in const LineSplitter().convert(text)) {
-        final trimmed = line.replaceFirst(RegExp(r'^[#>\-*\s]+'), '').trim();
-        if (trimmed.isNotEmpty) {
-          return trimmed.length > 120 ? '${trimmed.substring(0, 120)}…' : trimmed;
+        final trimmed = line
+            .replaceFirst(RegExp(r'^[#>\-*+\s]+(\[[ xX]\]\s*)?'), '')
+            .trim();
+        // A heading that just repeats the file name adds nothing.
+        if (trimmed.isNotEmpty && !(line.startsWith('#') && trimmed == title)) {
+          return trimmed.length > 120
+              ? '${trimmed.substring(0, 120)}…'
+              : trimmed;
         }
       }
     } on FileSystemException {

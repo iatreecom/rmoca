@@ -11,7 +11,7 @@ import 'remote.dart';
 /// platform (no native git needed) and lets one sync become one commit.
 class GitHubRemote implements NoteRemote {
   GitHubRemote(this.settings, {http.Client? client})
-      : _client = client ?? http.Client();
+    : _client = client ?? http.Client();
 
   final SyncSettings settings;
   final http.Client _client;
@@ -42,8 +42,10 @@ class GitHubRemote implements NoteRemote {
     final treeSha = (commit['tree'] as Map)['sha'] as String;
     final tree = await _request('GET', '/git/trees/$treeSha?recursive=1');
     if (tree['truncated'] == true) {
-      throw RemoteException('저장소가 너무 커서 전체 목록을 가져올 수 없습니다. '
-          '더 작은 폴더를 지정해 주세요.');
+      throw RemoteException(
+        '저장소가 너무 커서 전체 목록을 가져올 수 없습니다. '
+        '더 작은 폴더를 지정해 주세요.',
+      );
     }
     final files = <String, String>{};
     for (final entry in (tree['tree'] as List).cast<Map>()) {
@@ -73,18 +75,26 @@ class GitHubRemote implements NoteRemote {
     if (parentCommit == null) {
       // The Git Data API refuses to work on an empty repository, so create
       // the first file through the contents API, then continue normally.
-      final first = changes.firstWhere((c) => c.content != null,
-          orElse: () => throw RemoteException('빈 저장소에서는 삭제할 파일이 없습니다.'));
-      await _request('PUT', '/contents/${_encodePath('$_prefix${first.path}')}',
-          body: {
-            'message': message,
-            'content': base64Encode(first.content!),
-            'branch': settings.branch,
-          });
+      final first = changes.firstWhere(
+        (c) => c.content != null,
+        orElse: () => throw RemoteException('빈 저장소에서는 삭제할 파일이 없습니다.'),
+      );
+      await _request(
+        'PUT',
+        '/contents/${_encodePath('$_prefix${first.path}')}',
+        body: {
+          'message': message,
+          'content': base64Encode(first.content!),
+          'branch': settings.branch,
+        },
+      );
       final rest = changes.where((c) => c != first).toList();
       if (rest.isEmpty) return;
       return commit(
-          parentCommit: await _headCommit(), changes: rest, message: message);
+        parentCommit: await _headCommit(),
+        changes: rest,
+        message: message,
+      );
     }
 
     final parent = await _request('GET', '/git/commits/$parentCommit');
@@ -94,12 +104,21 @@ class GitHubRemote implements NoteRemote {
     for (final change in changes) {
       final path = '$_prefix${change.path}';
       if (change.content == null) {
-        entries.add({'path': path, 'mode': '100644', 'type': 'blob', 'sha': null});
-      } else {
-        final blob = await _request('POST', '/git/blobs', body: {
-          'content': base64Encode(change.content!),
-          'encoding': 'base64',
+        entries.add({
+          'path': path,
+          'mode': '100644',
+          'type': 'blob',
+          'sha': null,
         });
+      } else {
+        final blob = await _request(
+          'POST',
+          '/git/blobs',
+          body: {
+            'content': base64Encode(change.content!),
+            'encoding': 'base64',
+          },
+        );
         entries.add({
           'path': path,
           'mode': '100644',
@@ -109,16 +128,26 @@ class GitHubRemote implements NoteRemote {
       }
     }
 
-    final tree = await _request('POST', '/git/trees',
-        body: {'base_tree': baseTree, 'tree': entries});
-    final newCommit = await _request('POST', '/git/commits', body: {
-      'message': message,
-      'tree': tree['sha'],
-      'parents': [parentCommit],
-    });
+    final tree = await _request(
+      'POST',
+      '/git/trees',
+      body: {'base_tree': baseTree, 'tree': entries},
+    );
+    final newCommit = await _request(
+      'POST',
+      '/git/commits',
+      body: {
+        'message': message,
+        'tree': tree['sha'],
+        'parents': [parentCommit],
+      },
+    );
     try {
-      await _request('PATCH', '/git/refs/heads/${settings.branch}',
-          body: {'sha': newCommit['sha'], 'force': false});
+      await _request(
+        'PATCH',
+        '/git/refs/heads/${settings.branch}',
+        body: {'sha': newCommit['sha'], 'force': false},
+      );
     } on RemoteException catch (e) {
       // 422 = not a fast-forward: someone pushed in the meantime.
       if (e.statusCode == 422 || e.statusCode == 409) {
@@ -136,16 +165,24 @@ class GitHubRemote implements NoteRemote {
       // 409: repository is empty. 404: branch does not exist yet.
       if (e.statusCode == 409) return null;
       if (e.statusCode == 404) {
-        await _request('GET', ''); // Throws a clearer error if the repo is missing.
-        throw RemoteException("'${settings.branch}' 브랜치를 찾을 수 없습니다.",
-            statusCode: 404);
+        await _request(
+          'GET',
+          '',
+        ); // Throws a clearer error if the repo is missing.
+        throw RemoteException(
+          "'${settings.branch}' 브랜치를 찾을 수 없습니다.",
+          statusCode: 404,
+        );
       }
       rethrow;
     }
   }
 
-  Future<Map<String, Object?>> _request(String method, String path,
-      {Map<String, Object?>? body}) async {
+  Future<Map<String, Object?>> _request(
+    String method,
+    String path, {
+    Map<String, Object?>? body,
+  }) async {
     final request = http.Request(method, Uri.parse('$_repoUrl$path'))
       ..headers.addAll({
         'Accept': 'application/vnd.github+json',
@@ -156,14 +193,16 @@ class GitHubRemote implements NoteRemote {
     if (body != null) request.body = jsonEncode(body);
 
     final response = await http.Response.fromStream(
-        await _client.send(request).timeout(const Duration(seconds: 30)));
+      await _client.send(request).timeout(const Duration(seconds: 30)),
+    );
     if (response.statusCode >= 200 && response.statusCode < 300) {
       return Map<String, Object?>.from(jsonDecode(response.body) as Map);
     }
 
     String detail = response.reasonPhrase ?? '';
     try {
-      detail = (jsonDecode(response.body) as Map)['message'] as String? ?? detail;
+      detail =
+          (jsonDecode(response.body) as Map)['message'] as String? ?? detail;
     } catch (_) {
       // Non-JSON error body; keep the reason phrase.
     }

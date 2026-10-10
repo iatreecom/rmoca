@@ -32,7 +32,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     final s = context.read<AppState>().settings;
     _repo = TextEditingController(
-        text: s.owner.isEmpty ? '' : '${s.owner}/${s.repo}');
+      text: s.owner.isEmpty ? '' : '${s.owner}/${s.repo}',
+    );
     _branch = TextEditingController(text: s.branch);
     _folder = TextEditingController(text: s.folder);
     _token = TextEditingController(text: s.token);
@@ -51,7 +52,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// Accepts `owner/repo`, `https://github.com/owner/repo(.git)` or
   /// `git@github.com:owner/repo.git`, optionally with `/tree/branch/folder`.
-  ({String owner, String repo, String? branch, String? folder})? _parseRepo(String input) {
+  ({String owner, String repo, String? branch, String? folder})? _parseRepo(
+    String input,
+  ) {
     var s = input.trim();
     s = s.replaceFirst(RegExp(r'^git@[^:]+:'), '');
     s = s.replaceFirst(RegExp(r'^https?://[^/]+/'), '');
@@ -70,9 +73,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   SyncSettings? _build() {
     final parsed = _parseRepo(_repo.text);
     if (parsed == null) return null;
-    final branch = _branch.text.trim().isEmpty ? (parsed.branch ?? 'main') : _branch.text.trim();
+    final branch = _branch.text.trim().isEmpty
+        ? (parsed.branch ?? 'main')
+        : _branch.text.trim();
     final folder = SyncSettings.normalizeFolder(
-        _folder.text.trim().isEmpty ? (parsed.folder ?? '') : _folder.text);
+      _folder.text.trim().isEmpty ? (parsed.folder ?? '') : _folder.text,
+    );
     final current = context.read<AppState>().settings;
     return current.copyWith(
       owner: parsed.owner,
@@ -80,9 +86,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       branch: branch,
       folder: folder,
       token: _token.text.trim(),
-      apiBaseUrl: _api.text.trim().isEmpty ? 'https://api.github.com' : _api.text.trim(),
+      apiBaseUrl: _api.text.trim().isEmpty
+          ? 'https://api.github.com'
+          : _api.text.trim(),
       autoSync: _autoSync,
-      deviceName: _device.text.trim().isEmpty ? current.deviceName : _device.text.trim(),
+      deviceName: _device.text.trim().isEmpty
+          ? current.deviceName
+          : _device.text.trim(),
     );
   }
 
@@ -119,10 +129,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (context) => AlertDialog(
           title: const Text('동기화 위치 변경'),
           content: const Text(
-              '이 기기의 메모가 새 위치의 메모와 합쳐집니다. 같은 이름의 메모 내용이 다르면 충돌 사본이 만들어집니다. 계속할까요?'),
+            '이 기기의 메모가 새 위치의 메모와 합쳐집니다. 같은 이름의 메모 내용이 다르면 충돌 사본이 만들어집니다. 계속할까요?',
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('변경')),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('변경'),
+            ),
           ],
         ),
       );
@@ -159,30 +176,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 hintText: 'owner/repo 또는 https://github.com/owner/repo',
                 border: OutlineInputBorder(),
               ),
-              validator: (v) => _parseRepo(v ?? '') == null ? 'owner/repo 형식으로 입력하세요' : null,
+              validator: (v) =>
+                  _parseRepo(v ?? '') == null ? 'owner/repo 형식으로 입력하세요' : null,
             ),
             const SizedBox(height: 12),
-            Row(children: [
-              Expanded(
-                child: TextFormField(
-                  controller: _branch,
-                  decoration: const InputDecoration(
-                      labelText: '브랜치', hintText: 'main', border: OutlineInputBorder()),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: TextFormField(
-                  controller: _folder,
-                  decoration: const InputDecoration(
-                    labelText: '경로 (폴더)',
-                    hintText: '예: notes (비우면 저장소 루트)',
-                    border: OutlineInputBorder(),
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _branch,
+                    decoration: const InputDecoration(
+                      labelText: '브랜치',
+                      hintText: 'main',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
                 ),
-              ),
-            ]),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: TextFormField(
+                    controller: _folder,
+                    decoration: const InputDecoration(
+                      labelText: '경로 (폴더)',
+                      hintText: '예: notes (비우면 저장소 루트)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             TextFormField(
               controller: _token,
@@ -194,31 +217,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 helperText: 'Fine-grained 토큰: 해당 저장소의 Contents 읽기/쓰기 권한',
                 border: const OutlineInputBorder(),
                 suffixIcon: IconButton(
-                  icon: Icon(_showToken ? Icons.visibility_off : Icons.visibility),
+                  icon: Icon(
+                    _showToken ? Icons.visibility_off : Icons.visibility,
+                  ),
                   onPressed: () => setState(() => _showToken = !_showToken),
                 ),
               ),
               validator: (v) => (v ?? '').trim().isEmpty ? '토큰을 입력하세요' : null,
             ),
             const SizedBox(height: 12),
-            Row(children: [
-              OutlinedButton.icon(
-                onPressed: _testing ? null : _test,
-                icon: _testing
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.wifi_tethering),
-                label: const Text('연결 테스트'),
-              ),
-              const SizedBox(width: 12),
-              if (_testResult != null)
-                Expanded(
-                  child: Text(
-                    _testResult!,
-                    style: TextStyle(
-                        color: _testOk ? Colors.green.shade700 : Theme.of(context).colorScheme.error),
-                  ),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _testing ? null : _test,
+                  icon: _testing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.wifi_tethering),
+                  label: const Text('연결 테스트'),
                 ),
-            ]),
+                const SizedBox(width: 12),
+                if (_testResult != null)
+                  Expanded(
+                    child: Text(
+                      _testResult!,
+                      style: TextStyle(
+                        color: _testOk
+                            ? Colors.green.shade700
+                            : Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
             const Divider(height: 32),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -254,8 +288,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             if (app.lastError != null) ...[
               const SizedBox(height: 12),
-              Text('최근 동기화 메시지: ${app.lastError}',
-                  style: Theme.of(context).textTheme.bodySmall),
+              Text(
+                '최근 동기화 메시지: ${app.lastError}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ],
           ],
         ),

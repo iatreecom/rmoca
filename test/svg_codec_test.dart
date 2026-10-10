@@ -7,23 +7,30 @@ import 'package:rmoca/drawing/svg_codec.dart';
 
 void main() {
   test('drawing round-trips through SVG', () {
-    final drawing = Drawing(strokes: [
-      Stroke(
-        points: const [PointVector(10, 10, 0.3), PointVector(50, 60, 0.8), PointVector(90, 20, 0.5)],
-        color: const Color(0xFF1E5EFF),
-        size: 6,
-      ),
-      Stroke(
-        points: const [PointVector(5, 5), PointVector(6, 6)],
-        color: const Color(0x66FFE14D),
-        size: 20,
-        simulatePressure: true,
-      ),
-    ], height: 2000);
+    final drawing = Drawing(
+      strokes: [
+        Stroke(
+          points: const [
+            PointVector(10, 10, 0.3),
+            PointVector(50, 60, 0.8),
+            PointVector(90, 20, 0.5),
+          ],
+          color: const Color(0xFF1E5EFF),
+          size: 6,
+        ),
+        Stroke(
+          points: const [PointVector(5, 5), PointVector(6, 6)],
+          color: const Color(0x66FFE14D),
+          size: 20,
+          simulatePressure: true,
+        ),
+      ],
+      height: 2000,
+    );
 
     final svg = SvgCodec.encode(drawing);
     expect(svg, contains('<svg'));
-    expect(svg, contains('viewBox="0 0 1000 2000"'));
+    expect(svg, contains('data-page-height="2000"'));
 
     final decoded = SvgCodec.decode(svg)!;
     expect(decoded.height, 2000);
@@ -39,7 +46,35 @@ void main() {
   });
 
   test('foreign SVGs are not editable', () {
-    expect(SvgCodec.decode('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>'), isNull);
+    expect(
+      SvgCodec.decode(
+        '<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>',
+      ),
+      isNull,
+    );
     expect(SvgCodec.decode('not xml'), isNull);
+  });
+
+  test('visible area is cropped to the ink but the page is kept', () {
+    final drawing = Drawing(
+      strokes: [
+        Stroke(
+          points: const [PointVector(400, 500), PointVector(450, 520)],
+          color: const Color(0xFF000000),
+          size: 4,
+        ),
+      ],
+    );
+    final svg = SvgCodec.encode(drawing);
+    final viewBox = RegExp(r'viewBox="([^"]+)"').firstMatch(svg)!.group(1)!;
+    final v = viewBox.split(' ').map(double.parse).toList();
+    expect(v[0], lessThan(400));
+    expect(v[0], greaterThan(300));
+    expect(v[2], lessThan(200)); // Far narrower than the 1000 wide page.
+
+    final decoded = SvgCodec.decode(svg)!;
+    expect(decoded.width, Drawing.defaultWidth);
+    expect(decoded.height, Drawing.defaultHeight);
+    expect(decoded.strokes.single.points.first.x, 400);
   });
 }

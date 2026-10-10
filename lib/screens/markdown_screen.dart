@@ -14,7 +14,11 @@ import 'drawing_screen.dart';
 
 /// Markdown editor with live preview; saves automatically.
 class MarkdownScreen extends StatefulWidget {
-  const MarkdownScreen({super.key, required this.path, this.startEditing = false});
+  const MarkdownScreen({
+    super.key,
+    required this.path,
+    this.startEditing = false,
+  });
 
   final String path;
   final bool startEditing;
@@ -57,14 +61,17 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
 
   Future<void> _load() async {
     final store = _app.store;
-    final content =
-        await store.exists(widget.path) ? await store.readText(widget.path) : '';
+    final content = await store.exists(widget.path)
+        ? await store.readText(widget.path)
+        : '';
     if (!mounted) return;
     _text.removeListener(_onChanged);
     final selection = _text.selection;
     _text.text = content;
     _lastText = content;
-    if (selection.isValid && selection.end <= content.length) _text.selection = selection;
+    if (selection.isValid && selection.end <= content.length) {
+      _text.selection = selection;
+    }
     _text.addListener(_onChanged);
     setState(() {
       _loading = false;
@@ -98,9 +105,19 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     }
     final selected = sel.textInside(text);
     _text.value = TextEditingValue(
-      text: sel.textBefore(text) + before + selected + after + sel.textAfter(text),
+      text:
+          sel.textBefore(text) +
+          before +
+          selected +
+          after +
+          sel.textAfter(text),
       selection: TextSelection.collapsed(
-          offset: sel.start + before.length + selected.length + (selected.isEmpty ? 0 : after.length)),
+        offset:
+            sel.start +
+            before.length +
+            selected.length +
+            (selected.isEmpty ? 0 : after.length),
+      ),
     );
     _focus.requestFocus();
   }
@@ -118,37 +135,47 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
   }
 
   Future<void> _insertDrawing() async {
-    final drawings = _app.notes.where((n) => n.kind == NoteKind.drawing).toList();
+    final drawings = _app.notes
+        .where((n) => n.kind == NoteKind.drawing)
+        .toList();
     final choice = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
-        child: ListView(shrinkWrap: true, children: [
-          ListTile(
-            leading: const Icon(Icons.add),
-            title: const Text('새 그림 그리기'),
-            onTap: () => Navigator.pop(context, ''),
-          ),
-          for (final d in drawings)
+        child: ListView(
+          shrinkWrap: true,
+          children: [
             ListTile(
-              leading: const Icon(Icons.brush_outlined),
-              title: Text(d.title),
-              subtitle: d.folder.isEmpty ? null : Text(d.folder),
-              onTap: () => Navigator.pop(context, d.path),
+              leading: const Icon(Icons.add),
+              title: const Text('새 그림 그리기'),
+              onTap: () => Navigator.pop(context, ''),
             ),
-        ]),
+            for (final d in drawings)
+              ListTile(
+                leading: const Icon(Icons.brush_outlined),
+                title: Text(d.title),
+                subtitle: d.folder.isEmpty ? null : Text(d.folder),
+                onTap: () => Navigator.pop(context, d.path),
+              ),
+          ],
+        ),
       ),
     );
     if (choice == null || !mounted) return;
     var path = choice;
     if (path.isEmpty) {
-      path = await _app.newNotePath('${p.posix.basenameWithoutExtension(widget.path)} 그림', 'svg');
+      path = await _app.newNotePath(
+        '${p.posix.basenameWithoutExtension(widget.path)} 그림',
+        'svg',
+      );
       if (!mounted) return;
-      await Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => DrawingScreen(path: path)));
+      await Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => DrawingScreen(path: path)));
       if (!await _app.store.exists(path)) return;
     }
     final rel = p.posix.relative(path, from: _noteDir);
-    _wrap('![${p.posix.basenameWithoutExtension(path)}](${Uri.encodeFull(rel)})\n');
+    // `<...>` keeps names with spaces or Korean readable in the source.
+    final target = RegExp(r'[\s()<>]').hasMatch(rel) ? '<$rel>' : rel;
+    _wrap('![${p.posix.basenameWithoutExtension(path)}]($target)\n');
   }
 
   String get _noteDir {
@@ -159,7 +186,9 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
   /// Resolves a link inside the note to a note path, if it points to one.
   String? _resolveLocal(Uri uri) {
     if (uri.hasScheme) return null;
-    final joined = p.posix.normalize(p.posix.join(_noteDir.isEmpty ? '.' : _noteDir, Uri.decodeFull(uri.path)));
+    final joined = p.posix.normalize(
+      p.posix.join(_noteDir.isEmpty ? '.' : _noteDir, Uri.decodeFull(uri.path)),
+    );
     if (joined.startsWith('..')) return null;
     return joined;
   }
@@ -174,8 +203,9 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
           : Image.file(file);
       return GestureDetector(
         onTap: local.toLowerCase().endsWith('.svg')
-            ? () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => DrawingScreen(path: local)))
+            ? () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => DrawingScreen(path: local)),
+              )
             : null,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 480),
@@ -183,8 +213,10 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
         ),
       );
     }
-    return Image.network(uri.toString(),
-        errorBuilder: (_, _, _) => Text('[이미지: ${alt ?? uri}]'));
+    return Image.network(
+      uri.toString(),
+      errorBuilder: (_, _, _) => Text('[이미지: ${alt ?? uri}]'),
+    );
   }
 
   void _openLink(String text, String? href, String title) {
@@ -192,88 +224,132 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     final local = _resolveLocal(Uri.parse(href));
     if (local == null || !Note.isNotePath(local)) return;
     if (!File(_app.store.fileFor(local).path).existsSync()) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => Note.isDrawingPath(local)
-          ? DrawingScreen(path: local)
-          : MarkdownScreen(path: local),
-    ));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Note.isDrawingPath(local)
+            ? DrawingScreen(path: local)
+            : MarkdownScreen(path: local),
+      ),
+    );
   }
 
   Widget _preview() => Markdown(
-        data: _text.text,
-        selectable: true,
-        padding: const EdgeInsets.all(20),
-        imageBuilder: _image,
-        onTapLink: _openLink,
-      );
+    data: _text.text,
+    selectable: true,
+    padding: const EdgeInsets.all(20),
+    imageBuilder: _image,
+    onTapLink: _openLink,
+  );
 
-  Widget _editor() => Column(children: [
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(children: [
-            IconButton(tooltip: '제목', icon: const Icon(Icons.title), onPressed: () => _linePrefix('## ')),
-            IconButton(tooltip: '굵게', icon: const Icon(Icons.format_bold), onPressed: () => _wrap('**', '**')),
-            IconButton(tooltip: '기울임', icon: const Icon(Icons.format_italic), onPressed: () => _wrap('_', '_')),
-            IconButton(tooltip: '목록', icon: const Icon(Icons.format_list_bulleted), onPressed: () => _linePrefix('- ')),
-            IconButton(tooltip: '체크리스트', icon: const Icon(Icons.check_box_outlined), onPressed: () => _linePrefix('- [ ] ')),
-            IconButton(tooltip: '코드', icon: const Icon(Icons.code), onPressed: () => _wrap('`', '`')),
-            IconButton(tooltip: '그림 삽입', icon: const Icon(Icons.brush_outlined), onPressed: _insertDrawing),
-          ]),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: TextField(
-            controller: _text,
-            focusNode: _focus,
-            maxLines: null,
-            expands: true,
-            keyboardType: TextInputType.multiline,
-            textAlignVertical: TextAlignVertical.top,
-            style: const TextStyle(fontFamily: 'monospace', fontFamilyFallback: ['Menlo', 'Consolas', 'Roboto Mono'], height: 1.5),
-            decoration: const InputDecoration(
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.all(20),
-              hintText: '# 제목\n\n마크다운으로 메모를 작성하세요…',
+  Widget _editor() => Column(
+    children: [
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: '제목',
+              icon: const Icon(Icons.title),
+              onPressed: () => _linePrefix('## '),
             ),
+            IconButton(
+              tooltip: '굵게',
+              icon: const Icon(Icons.format_bold),
+              onPressed: () => _wrap('**', '**'),
+            ),
+            IconButton(
+              tooltip: '기울임',
+              icon: const Icon(Icons.format_italic),
+              onPressed: () => _wrap('_', '_'),
+            ),
+            IconButton(
+              tooltip: '목록',
+              icon: const Icon(Icons.format_list_bulleted),
+              onPressed: () => _linePrefix('- '),
+            ),
+            IconButton(
+              tooltip: '체크리스트',
+              icon: const Icon(Icons.check_box_outlined),
+              onPressed: () => _linePrefix('- [ ] '),
+            ),
+            IconButton(
+              tooltip: '코드',
+              icon: const Icon(Icons.code),
+              onPressed: () => _wrap('`', '`'),
+            ),
+            IconButton(
+              tooltip: '그림 삽입',
+              icon: const Icon(Icons.brush_outlined),
+              onPressed: _insertDrawing,
+            ),
+          ],
+        ),
+      ),
+      const Divider(height: 1),
+      Expanded(
+        child: TextField(
+          controller: _text,
+          focusNode: _focus,
+          maxLines: null,
+          expands: true,
+          keyboardType: TextInputType.multiline,
+          textAlignVertical: TextAlignVertical.top,
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontFamilyFallback: ['Menlo', 'Consolas', 'Roboto Mono'],
+            height: 1.5,
+          ),
+          decoration: const InputDecoration(
+            border: InputBorder.none,
+            contentPadding: EdgeInsets.all(20),
+            hintText: '# 제목\n\n마크다운으로 메모를 작성하세요…',
           ),
         ),
-      ]);
+      ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) {
     final title = p.posix.basenameWithoutExtension(widget.path);
-    return LayoutBuilder(builder: (context, constraints) {
-      final wide = constraints.maxWidth >= 900;
-      Widget body;
-      if (_loading) {
-        body = const Center(child: CircularProgressIndicator());
-      } else if (wide && _editing) {
-        body = Row(children: [
-          Expanded(child: _editor()),
-          const VerticalDivider(width: 1),
-          Expanded(child: _preview()),
-        ]);
-      } else {
-        body = _editing ? _editor() : _preview();
-      }
-      return Scaffold(
-        appBar: AppBar(
-          title: Text(title),
-          actions: [
-            IconButton(
-              tooltip: _editing ? '읽기' : '편집',
-              icon: Icon(_editing ? Icons.visibility_outlined : Icons.edit_outlined),
-              onPressed: () {
-                setState(() => _editing = !_editing);
-                if (_editing) _focus.requestFocus();
-                _save();
-              },
-            ),
-            const SyncIndicator(),
-          ],
-        ),
-        body: SafeArea(top: false, child: body),
-      );
-    });
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 900;
+        Widget body;
+        if (_loading) {
+          body = const Center(child: CircularProgressIndicator());
+        } else if (wide && _editing) {
+          body = Row(
+            children: [
+              Expanded(child: _editor()),
+              const VerticalDivider(width: 1),
+              Expanded(child: _preview()),
+            ],
+          );
+        } else {
+          body = _editing ? _editor() : _preview();
+        }
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(title),
+            actions: [
+              IconButton(
+                tooltip: _editing ? '읽기' : '편집',
+                icon: Icon(
+                  _editing ? Icons.visibility_outlined : Icons.edit_outlined,
+                ),
+                onPressed: () {
+                  setState(() => _editing = !_editing);
+                  if (_editing) _focus.requestFocus();
+                  _save();
+                },
+              ),
+              const SyncIndicator(),
+            ],
+          ),
+          body: SafeArea(top: false, child: body),
+        );
+      },
+    );
   }
 }

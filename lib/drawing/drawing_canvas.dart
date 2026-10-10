@@ -164,52 +164,67 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: c,
-      builder: (context, _) => LayoutBuilder(builder: (context, constraints) {
-        final scale = constraints.maxWidth / c.drawing.width;
-        final scrollKinds = _scrollKinds;
-        return ScrollConfiguration(
-          behavior: ScrollConfiguration.of(context).copyWith(
-            dragDevices: scrollKinds,
-            scrollbars: true,
-          ),
-          child: SingleChildScrollView(
-            child: Listener(
-              behavior: HitTestBehavior.opaque,
-              onPointerDown: (e) => _down(e, scale, scrollKinds),
-              onPointerMove: (e) => _move(e, scale),
-              onPointerUp: (e) => _up(e),
-              onPointerCancel: (e) => _cancel(e),
-              child: SizedBox(
-                width: constraints.maxWidth,
-                height: c.drawing.height * scale,
-                child: Stack(children: [
-                  Positioned.fill(
-                    child: RepaintBoundary(
-                      child: CustomPaint(
-                        painter: _StrokesPainter(c.drawing.strokes, scale, c.version),
+      builder: (context, _) => LayoutBuilder(
+        builder: (context, constraints) {
+          final scale = constraints.maxWidth / c.drawing.width;
+          final scrollKinds = _scrollKinds;
+          return ScrollConfiguration(
+            behavior: ScrollConfiguration.of(context)
+                .copyWith(dragDevices: scrollKinds, scrollbars: true),
+            child: SingleChildScrollView(
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: (e) => _down(e, scale, scrollKinds),
+                onPointerMove: (e) => _move(e, scale),
+                onPointerUp: (e) => _up(e),
+                onPointerCancel: (e) => _cancel(e),
+                child: SizedBox(
+                  width: constraints.maxWidth,
+                  height: c.drawing.height * scale,
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: RepaintBoundary(
+                          child: CustomPaint(
+                            painter: _StrokesPainter(
+                              c.drawing.strokes,
+                              scale,
+                              c.version,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                      Positioned.fill(
+                        child: CustomPaint(
+                          painter: _LivePainter(c.live, scale),
+                        ),
+                      ),
+                    ],
                   ),
-                  Positioned.fill(
-                    child: CustomPaint(painter: _LivePainter(c.live, scale)),
-                  ),
-                ]),
+                ),
               ),
             ),
-          ),
-        );
-      }),
+          );
+        },
+      ),
     );
   }
 
   Offset _toPage(Offset local, double scale) => local / scale;
 
-  void _down(PointerDownEvent e, double scale, Set<PointerDeviceKind> scrollKinds) {
+  void _down(
+    PointerDownEvent e,
+    double scale,
+    Set<PointerDeviceKind> scrollKinds,
+  ) {
     if (_pointer != null || scrollKinds.contains(e.kind)) return;
-    if (e.kind == PointerDeviceKind.mouse && e.buttons != kPrimaryMouseButton) return;
+    if (e.kind == PointerDeviceKind.mouse && e.buttons != kPrimaryMouseButton) {
+      return;
+    }
     _pointer = e.pointer;
     final pos = _toPage(e.localPosition, scale);
-    _erasing = c.tool == DrawTool.eraser || e.kind == PointerDeviceKind.invertedStylus;
+    _erasing =
+        c.tool == DrawTool.eraser || e.kind == PointerDeviceKind.invertedStylus;
     if (_erasing) {
       c.checkpoint();
       _erasedSomething = c.eraseAt(pos, 12);
@@ -278,11 +293,11 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 
   Stroke _makeStroke() => Stroke(
-        points: List.of(_points),
-        color: _liveColor,
-        size: _liveSize,
-        simulatePressure: _simulate,
-      );
+    points: List.of(_points),
+    color: _liveColor,
+    size: _liveSize,
+    simulatePressure: _simulate,
+  );
 
   void _updateLive() {
     c.live = _makeStroke();

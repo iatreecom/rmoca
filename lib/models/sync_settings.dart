@@ -28,7 +28,10 @@ class SyncSettings {
   final String deviceName;
 
   bool get isConfigured =>
-      owner.isNotEmpty && repo.isNotEmpty && branch.isNotEmpty && token.isNotEmpty;
+      owner.isNotEmpty &&
+      repo.isNotEmpty &&
+      branch.isNotEmpty &&
+      token.isNotEmpty;
 
   /// Identifies the sync target; when it changes the sync history is reset.
   String get targetKey => '$apiBaseUrl|$owner/$repo@$branch:$folder';
@@ -51,15 +54,14 @@ class SyncSettings {
     String? apiBaseUrl,
     bool? autoSync,
     String? deviceName,
-  }) =>
-      SyncSettings(
-        owner: owner ?? this.owner,
-        repo: repo ?? this.repo,
-        branch: branch ?? this.branch,
-        folder: folder ?? this.folder,
-        token: token ?? this.token,
-        apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
-        autoSync: autoSync ?? this.autoSync,
-        deviceName: deviceName ?? this.deviceName,
-      );
+  }) => SyncSettings(
+    owner: owner ?? this.owner,
+    repo: repo ?? this.repo,
+    branch: branch ?? this.branch,
+    folder: folder ?? this.folder,
+    token: token ?? this.token,
+    apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
+    autoSync: autoSync ?? this.autoSync,
+    deviceName: deviceName ?? this.deviceName,
+  );
 }

@@ -26,11 +26,16 @@ class SyncIndicator extends StatelessWidget {
       tooltip: '$label$when$error',
       icon: app.status == SyncStatus.syncing
           ? const SizedBox(
-              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-          : Icon(icon,
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Icon(
+              icon,
               color: app.status == SyncStatus.error
                   ? Theme.of(context).colorScheme.error
-                  : null),
+                  : null,
+            ),
       onPressed: () {
         if (app.status == SyncStatus.notConfigured) {
           Navigator.of(context).pushNamed('/settings');

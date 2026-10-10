@@ -19,7 +19,11 @@ class SettingsRepository {
     final prefs = await SharedPreferences.getInstance();
     String token = '';
     try {
-      token = await _secure.read(key: _tokenKey) ?? '';
+      token =
+          await _secure
+              .read(key: _tokenKey)
+              .timeout(const Duration(seconds: 5)) ??
+          '';
     } catch (_) {
       // Keychain unavailable; the user can enter the token again.
     }
