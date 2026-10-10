@@ -1,15 +1,15 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../markdown/note_document.dart';
 import '../markdown/obsidian_syntax.dart';
+import '../markdown/html_lite.dart';
 import '../models/note.dart';
+import 'media_view.dart';
 
 /// What a [NoteView] can ask its screen to do.
 class NoteViewActions {
@@ -76,19 +76,35 @@ class NoteView extends StatelessWidget {
               ? null
               : () => actions.editDrawing!(b.id!, b.svg),
         ),
+        // Callout bodies can hold any block (math, mermaid, drawings…).
         CalloutBlock b => _Callout(
           block: b,
-          child: _markdown(context, doc, b.body),
+          child: _blocks(
+            context,
+            NoteDocument.parse(
+              b.body.text,
+              frontmatter: false,
+              lineMap: b.body.lines,
+            ),
+          ),
         ),
         EmbedBlock b => _embed(context, b.target),
         MathBlock b => MathBlockView(b.tex),
       };
 
+  Widget _blocks(BuildContext context, NoteDocument doc) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [for (final b in doc.blocks) _block(context, doc, b)],
+  );
+
   Widget _markdown(BuildContext context, NoteDocument doc, TextBlock block) {
     if (block.text.trim().isEmpty) return const SizedBox.shrink();
+    // Pasted HTML (<img>, <br>, <p align>…) becomes markdown; line count is
+    // kept so checkboxes still map to source lines.
+    final text = HtmlLite.toMarkdown(block.text);
     final checkLines = actions.toggleTask == null
         ? null
-        : checkboxLines(block.text, block.lines);
+        : checkboxLines(text, block.lines);
     var checkIndex = 0;
     final blockHeadings = doc.headings
         .where((h) => block.lines.contains(h.line))
@@ -102,7 +118,7 @@ class NoteView extends StatelessWidget {
 
     final headingBuilder = HeadingBuilder(nextHeadingKey);
     return MarkdownBody(
-      data: block.text,
+      data: text,
       selectable: true,
       extensionSet: obsidianExtensions,
       inlineSyntaxes: obsidianInlineSyntaxes(),
@@ -113,8 +129,8 @@ class NoteView extends StatelessWidget {
         'math': InlineMathBuilder(),
         'pre': CodeBlockBuilder(),
         for (final h in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']) h: headingBuilder,
+        'img': _ImageBuilder(notePath: notePath, onOpen: actions.openPath),
       },
-      imageBuilder: (uri, title, alt) => _image(context, uri, alt),
       onTapLink: (text, href, title) => _tapLink(context, href),
       checkboxBuilder: (checked) {
         final line = checkLines != null && checkIndex < checkLines.length
@@ -160,47 +176,22 @@ class NoteView extends StatelessWidget {
     }
   }
 
-  Widget _image(BuildContext context, Uri uri, String? alt) {
-    final app = context.read<AppState>();
-    final local = _resolveRelative(uri.toString());
-    if (local != null) {
-      final file = app.store.fileFor(local);
-      if (!file.existsSync()) return _Missing('그림 없음: ${alt ?? local}');
-      return _fileImage(context, local, file);
-    }
-    return Image.network(
-      uri.toString(),
-      errorBuilder: (_, _, _) => _Missing('이미지: ${alt ?? uri}'),
-    );
-  }
-
-  Widget _fileImage(BuildContext context, String path, File file) {
-    final svg = path.toLowerCase().endsWith('.svg');
-    return GestureDetector(
-      onTap: svg ? () => actions.openPath(path) : null,
-      child: Container(
-        constraints: const BoxConstraints(maxHeight: 480),
-        decoration: svg
-            ? BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-              )
-            : null,
-        child: svg
-            ? SvgPicture.file(file, fit: BoxFit.contain)
-            : Image.file(file),
-      ),
-    );
-  }
-
   Widget _embed(BuildContext context, String target) {
     final app = context.read<AppState>();
-    final path = app.resolveWiki(target, notePath);
-    if (path == null) return _Missing('![[$target]] 를 찾을 수 없습니다');
-    if (Note.isDrawingPath(path)) {
+    // `![[photo.png|300]]`: the part after | is a size for images.
+    final (name, size) = splitSize(target);
+    final path = app.resolveWiki(name, notePath);
+    if (path == null) return _Missing('![[$name]] 를 찾을 수 없습니다');
+    if (Note.isDrawingPath(path) || Note.isAttachmentPath(path)) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        child: _fileImage(context, path, app.store.fileFor(path)),
+        child: MediaView(
+          src: p.posix.relative(path, from: _dir.isEmpty ? '.' : _dir),
+          notePath: notePath,
+          width: size?.width,
+          height: size == null || size.height.isNaN ? null : size.height,
+          onOpen: actions.openPath,
+        ),
       );
     }
     if (depth >= 2 || path == notePath) {
@@ -495,13 +486,8 @@ class _EmbeddedSvg extends StatelessWidget {
             children: [
               ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 480),
-                child: Center(
-                  child: SvgPicture.string(
-                    svg,
-                    fit: BoxFit.contain,
-                    placeholderBuilder: (_) => const SizedBox(height: 48),
-                  ),
-                ),
+                // heightFactor: shrink to the SVG instead of the max height.
+                child: Center(heightFactor: 1, child: SvgView(svg)),
               ),
               if (onEdit != null)
                 Positioned(
@@ -573,6 +559,47 @@ class _EmbeddedNote extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// `name|300` or `name|300x200` (Obsidian image sizes) -> name and size.
+(String, Size?) splitSize(String s) {
+  final bar = s.lastIndexOf('|');
+  if (bar < 0) return (s.trim(), null);
+  final m = RegExp(r'^\s*(\d+)(?:\s*x\s*(\d+))?\s*$')
+      .firstMatch(s.substring(bar + 1));
+  if (m == null) return (s.substring(0, bar).trim(), null);
+  final w = double.parse(m[1]!);
+  final h = m[2] == null ? null : double.parse(m[2]!);
+  return (s.substring(0, bar).trim(), Size(w, h ?? double.nan));
+}
+
+/// Markdown images (`![alt|300](src)`) of every kind go through MediaView.
+class _ImageBuilder extends MarkdownElementBuilder {
+  _ImageBuilder({required this.notePath, required this.onOpen});
+
+  final String notePath;
+  final void Function(String path) onOpen;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final (alt, size) = splitSize(element.attributes['alt'] ?? '');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: MediaView(
+        src: element.attributes['src'] ?? '',
+        notePath: notePath,
+        alt: alt,
+        width: size?.width,
+        height: size == null || size.height.isNaN ? null : size.height,
+        onOpen: onOpen,
       ),
     );
   }

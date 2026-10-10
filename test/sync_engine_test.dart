@@ -271,4 +271,23 @@ void main() {
     expect(await store.readText('work/a.md'), 'x');
     expect(await store.listNotes(trash: true), isEmpty);
   });
+
+  test('image attachments sync byte for byte', () async {
+    final png = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0, 255, 1, 2, 3]);
+    await store.writeBytesUnlocked('attachments/photo.png', png);
+    await engine.sync();
+    final sha = remote.files['attachments/photo.png']!;
+    expect(remote.blobs[sha], png);
+    expect(await store.listNotes(), isEmpty); // Not shown as a note.
+    expect(await store.listAttachments(), ['attachments/photo.png']);
+
+    // Another device adds a picture: it is downloaded unchanged.
+    final jpg = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0x00, 0x10]);
+    final jsha = gitBlobSha(jpg);
+    remote.blobs[jsha] = jpg;
+    remote.files = {...remote.files, 'b.jpg': jsha};
+    remote.head++;
+    await engine.sync();
+    expect(await store.readBytes('b.jpg'), jpg);
+  });
 }

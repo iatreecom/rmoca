@@ -428,7 +428,8 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     return SingleChildScrollView(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 80),
-      child: Center(
+      child: Align(
+        alignment: Alignment.topCenter,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 780),
           child: Column(
@@ -564,7 +565,11 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
               height: 1.6,
             ),
             decoration: const InputDecoration(
+              // A plain page, not the app's filled text-field style.
+              filled: false,
               border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
               contentPadding: EdgeInsets.fromLTRB(24, 20, 24, 20),
               hintText:
                   '# 제목\n\n마크다운으로 메모를 작성하세요…\n[[다른 메모]] 로 연결하고 #태그 를 붙일 수 있습니다',

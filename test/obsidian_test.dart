@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:rmoca/markdown/note_document.dart';
 import 'package:rmoca/markdown/note_links.dart';
 import 'package:rmoca/markdown/obsidian_syntax.dart';
@@ -111,5 +112,61 @@ E = mc^2
       'x/deep/Note.md',
     );
     expect(resolveWikiTarget('Missing', 'here.md', paths), isNull);
+  });
+
+  group('inline math', () {
+    List<String> maths(String text) {
+      final nodes = md.Document(
+        extensionSet: obsidianExtensions,
+        inlineSyntaxes: obsidianInlineSyntaxes(),
+      ).parseInline(text);
+      final out = <String>[];
+      void walk(md.Node n) {
+        if (n is md.Element) {
+          if (n.tag == 'math') {
+            out.add('${n.attributes['display']}:${n.textContent}');
+          }
+          n.children?.forEach(walk);
+        }
+      }
+
+      nodes.forEach(walk);
+      return out;
+    }
+
+    test(r'$x$, \(x\) and inline $$x$$', () {
+      expect(maths(r'a $x^2$ b \(\alpha_1\) c $$\sum_i i$$'), [
+        r'false:x^2',
+        r'false:\alpha_1',
+        r'true:\sum_i i',
+      ]);
+    });
+
+    test('prices are not math', () {
+      expect(maths(r'it costs $5 and $10 today'), isEmpty);
+      expect(maths(r'$ x $ is not math'), isEmpty);
+    });
+
+    test('underscores and stars inside math are not emphasis', () {
+      expect(maths(r'$a_1 * b_2 * c$'), [r'false:a_1 * b_2 * c']);
+    });
+
+    test(r'\[ \] display blocks are parsed', () {
+      final doc = NoteDocument.parse('text\n\\[\nE = mc^2\n\\]\nmore');
+      expect(doc.blocks.whereType<MathBlock>().single.tex, 'E = mc^2');
+    });
+
+    test('math and blocks inside callouts keep source lines', () {
+      const src = '> [!note] T\n> \$\$x\$\$\n> - [ ] task';
+      final doc = NoteDocument.parse(src);
+      final body = doc.blocks.whereType<CalloutBlock>().single.body;
+      final inner = NoteDocument.parse(
+        body.text,
+        frontmatter: false,
+        lineMap: body.lines,
+      );
+      expect(inner.blocks.whereType<MathBlock>().single.tex, 'x');
+      expect(inner.blocks.whereType<TextBlock>().last.lines, [2]);
+    });
   });
 }

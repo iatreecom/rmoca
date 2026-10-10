@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
@@ -8,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../markdown/embedded_drawings.dart';
 import '../models/note.dart';
+import '../widgets/media_view.dart';
 import '../widgets/sync_indicator.dart';
 import 'drawing_screen.dart';
 import 'markdown_screen.dart';
@@ -720,6 +720,7 @@ class _Content extends StatelessWidget {
                 itemBuilder: (context, i) => _FolderCard(
                   folder: folders[i],
                   count: app.countUnder(folders[i]),
+                  images: app.attachmentsUnder(folders[i]),
                   color: app.folderColor(folders[i]),
                   onTap: () => state._openFolder(folders[i]),
                   onAction: (a) => switch (a) {
@@ -1258,10 +1259,12 @@ class _FolderCard extends StatelessWidget {
     required this.onTap,
     required this.onAction,
     this.color,
+    this.images = 0,
   });
 
   final String folder;
   final int count;
+  final int images;
   final Color? color;
   final VoidCallback onTap;
   final ValueChanged<String> onAction;
@@ -1298,7 +1301,7 @@ class _FolderCard extends StatelessWidget {
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   Text(
-                    '메모 $count개',
+                    images > 0 ? '메모 $count개 · 이미지 $images개' : '메모 $count개',
                     style: Theme.of(context).textTheme.bodySmall
                         ?.copyWith(color: scheme.outline),
                   ),
@@ -1337,19 +1340,14 @@ class _NotePreview extends StatelessWidget {
     );
     Widget? drawing;
     if (note.kind == NoteKind.drawing) {
-      drawing = SvgPicture.file(
-        app.store.fileFor(note.path),
+      drawing = FutureBuilder<String>(
         key: key,
-        fit: BoxFit.contain,
-        placeholderBuilder: (_) => const SizedBox.shrink(),
+        future: app.store.readText(note.path),
+        builder: (context, snap) =>
+            snap.hasData ? SvgView(snap.data!) : const SizedBox.shrink(),
       );
     } else if (note.embeddedSvg != null) {
-      drawing = SvgPicture.string(
-        note.embeddedSvg!,
-        key: key,
-        fit: BoxFit.contain,
-        placeholderBuilder: (_) => const SizedBox.shrink(),
-      );
+      drawing = SvgView(note.embeddedSvg!, key: key);
     }
     if (drawing != null) {
       return ColoredBox(

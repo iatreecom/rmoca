@@ -50,9 +50,24 @@ class Note {
   /// Deleted notes keep their path under this folder (Obsidian's `.trash`).
   static const trashFolder = '.trash';
 
-  /// Files the sync engine mirrors: notes, folder markers and settings.
+  /// Images notes can show (`![](a.png)`, `![[a.png]]`); synced as-is.
+  static const attachmentExtensions = {
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.webp',
+    '.bmp',
+  };
+
+  static bool isAttachmentPath(String path) =>
+      attachmentExtensions.contains(p.posix.extension(path).toLowerCase());
+
+  /// Files the sync engine mirrors: notes, attachments, folder markers and
+  /// settings.
   static bool isSyncedPath(String path) =>
       isNotePath(path) ||
+      isAttachmentPath(path) ||
       p.posix.basename(path) == folderMarker ||
       path == metaPath;
 

@@ -2,13 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../drawing/drawing_canvas.dart';
 import '../drawing/stroke.dart';
 import '../drawing/svg_codec.dart';
+import '../widgets/media_view.dart';
 import '../widgets/sync_indicator.dart';
 
 /// Pen drawing editor that saves automatically, either to its own `.svg`
@@ -144,7 +144,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
             Expanded(
               child: InteractiveViewer(
                 maxScale: 8,
-                child: Center(child: SvgPicture.string(_foreignSvg!)),
+                child: Center(child: SvgView(_foreignSvg!)),
               ),
             ),
           ],

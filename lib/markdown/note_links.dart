@@ -9,9 +9,18 @@ class NoteLinks {
     required this.tags,
     required this.wikiTargets,
     required this.paths,
+    this.remoteMedia = const [],
   });
 
   static final empty = NoteLinks(tags: {}, wikiTargets: [], paths: []);
+
+  /// http(s) images the note shows; kept offline by the media cache.
+  final List<String> remoteMedia;
+
+  static final _remoteImage = RegExp(
+    r'''!\[[^\]\n]*\]\(<?(https?://[^)\s>]+)>?|<img\b[^>]*\bsrc\s*=\s*["']?(https?://[^"'\s>]+)''',
+    caseSensitive: false,
+  );
 
   final Set<String> tags;
 
@@ -66,6 +75,9 @@ class NoteLinks {
       if (!resolved.startsWith('..')) paths.add(resolved);
     }
     return NoteLinks(
+      remoteMedia: [
+        for (final m in _remoteImage.allMatches(text)) (m[1] ?? m[2])!,
+      ],
       tags: tags,
       wikiTargets: [for (final m in _wiki.allMatches(text)) m[1]!.trim()],
       paths: paths,

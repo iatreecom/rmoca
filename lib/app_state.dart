@@ -13,6 +13,7 @@ import 'models/note_meta.dart';
 import 'models/sync_settings.dart';
 import 'services/github_remote.dart';
 import 'services/local_store.dart';
+import 'services/media_cache.dart';
 import 'services/remote.dart';
 import 'services/settings_repository.dart';
 import 'services/sync_engine.dart';
@@ -72,6 +73,12 @@ class AppState extends ChangeNotifier {
   /// Synced favorites and folder colors.
   NoteMeta meta = NoteMeta();
 
+  /// Image attachments synced with the notes.
+  List<String> attachments = [];
+
+  /// Offline copies of remote images used by notes.
+  late final MediaCache media = MediaCache(store.mediaDir);
+
   /// Deleted notes, with paths inside `.trash`.
   List<Note> trash = [];
 
@@ -117,6 +124,7 @@ class AppState extends ChangeNotifier {
     );
 
     syncNow(auto: true);
+    unawaited(prefetchMedia());
   }
 
   /// Tracks network changes to sync as soon as we're back online.
@@ -152,7 +160,10 @@ class AppState extends ChangeNotifier {
       status = settings.isConfigured ? SyncStatus.offline : status;
       notifyListeners();
     }
-    if (cameOnline) syncNow(auto: true);
+    if (cameOnline) {
+      syncNow(auto: true);
+      unawaited(prefetchMedia());
+    }
   }
 
   @override
@@ -171,6 +182,7 @@ class AppState extends ChangeNotifier {
     notes = _sorted(await store.listNotes());
     folders = await store.listFolders();
     trash = await store.listNotes(trash: true);
+    attachments = await store.listAttachments();
     notifyListeners();
   }
 
@@ -327,8 +339,20 @@ class AppState extends ChangeNotifier {
   // --- links and tags --------------------------------------------------------
 
   /// Note path a `[[target]]` in [fromPath] points to, if it exists.
-  String? resolveWiki(String target, String fromPath) =>
-      resolveWikiTarget(target, fromPath, notes.map((n) => n.path));
+  String? resolveWiki(String target, String fromPath) => resolveWikiTarget(
+    target,
+    fromPath,
+    [...notes.map((n) => n.path), ...attachments],
+  );
+
+  /// Downloads remote images used anywhere in the notes that are not yet
+  /// stored, so they show offline later.
+  Future<void> prefetchMedia() async {
+    final urls = {for (final n in notes) ...n.links.remoteMedia};
+    if (urls.isEmpty) return;
+    final count = await media.prefetch(urls);
+    if (count > 0) debugPrint('cached $count remote images for offline use');
+  }
 
   /// Notes that link to [path] with a wikilink or a relative link.
   List<Note> backlinksTo(String path) => notes
@@ -381,6 +405,10 @@ class AppState extends ChangeNotifier {
   /// Folders directly inside [folder] ('' = root).
   List<String> subfolders(String folder) =>
       folders.where((f) => Note.parentOf(f) == folder).toList();
+
+  /// Number of images anywhere under [folder].
+  int attachmentsUnder(String folder) =>
+      attachments.where((a) => Note.isWithin(folder, a)).length;
 
   /// Number of notes anywhere under [folder].
   int countUnder(String folder) =>
@@ -484,6 +512,8 @@ class AppState extends ChangeNotifier {
       if (result.changedLocally.isNotEmpty) {
         _externalChanges.add(result.changedLocally);
       }
+      // New notes from other devices may use images not stored here yet.
+      unawaited(refreshNotes().then((_) => prefetchMedia()));
       if (result.conflicts.isNotEmpty) {
         lastError = '충돌 ${result.conflicts.length}건: 로컬 수정본을 별도 메모로 저장했습니다.';
         final names = result.conflicts

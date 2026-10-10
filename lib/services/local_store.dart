@@ -116,6 +116,20 @@ class LocalStore {
     return notes;
   }
 
+  /// Image attachments outside hidden folders.
+  Future<List<String>> listAttachments() async {
+    final result = <String>[];
+    await for (final entity in notesDir.list(recursive: true)) {
+      if (entity is! File) continue;
+      final rel = _relative(entity.path);
+      if (Note.isAttachmentPath(rel) && !Note.isHidden(rel)) result.add(rel);
+    }
+    return result..sort();
+  }
+
+  /// Where copies of remote images are kept for offline use.
+  Directory get mediaDir => Directory(p.join(_root.path, 'media'));
+
   /// Every folder under the notes root ('a', 'a/b', ...), sorted.
   Future<List<String>> listFolders() async {
     final folders = <String>[];

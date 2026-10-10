@@ -101,7 +101,14 @@ class NoteDocument {
   static final _heading = RegExp(r'^(#{1,6})\s+(.+?)\s*#*\s*$');
   static final _svgId = RegExp(r'''data-id=["']([^"']+)["']''');
 
-  static NoteDocument parse(String source) {
+  /// Parses a note. [lineMap] maps line indices of [source] to lines of an
+  /// outer document (used for callout bodies, which are parsed again).
+  static NoteDocument parse(
+    String source, {
+    bool frontmatter = true,
+    List<int>? lineMap,
+  }) {
+    int at(int i) => lineMap == null ? i : lineMap[i];
     final lines = _stripComments(source).split('\n');
     final blocks = <NoteBlock>[];
     final headings = <Heading>[];
@@ -109,7 +116,7 @@ class NoteDocument {
 
     var i = 0;
     // Frontmatter: '---' on the first line up to the next '---'.
-    if (lines.isNotEmpty && lines.first.trim() == '---') {
+    if (frontmatter && lines.isNotEmpty && lines.first.trim() == '---') {
       final end = lines.indexWhere((l) => l.trim() == '---', 1);
       if (end > 0) {
         properties = _parseYaml(lines.sublist(1, end).join('\n'));
@@ -136,13 +143,13 @@ class NoteDocument {
           fence = null;
         }
         text.add(line);
-        textLines.add(i);
+        textLines.add(at(i));
         continue;
       }
       if (fenceMatch != null) {
         fence = fenceMatch.group(1)!.substring(0, 3);
         text.add(line);
-        textLines.add(i);
+        textLines.add(at(i));
         continue;
       }
 
@@ -171,7 +178,7 @@ class NoteDocument {
         var j = i + 1;
         while (j < lines.length && lines[j].startsWith('>')) {
           body.add(lines[j].replaceFirst(RegExp(r'^> ?'), ''));
-          bodyLines.add(j);
+          bodyLines.add(at(j));
           j++;
         }
         final type = callout.group(1)!.toLowerCase();
@@ -218,12 +225,34 @@ class NoteDocument {
         }
       }
 
+      // \[ display math \]
+      if (trimmed.startsWith(r'\[')) {
+        if (trimmed.length > 4 && trimmed.endsWith(r'\]')) {
+          flush();
+          blocks.add(
+            MathBlock(trimmed.substring(2, trimmed.length - 2).trim()),
+          );
+          continue;
+        }
+        if (trimmed == r'\[') {
+          final end = _indexFrom(lines, i + 1, (l) => l.trim() == r'\]');
+          if (end != null) {
+            flush();
+            blocks.add(MathBlock(lines.sublist(i + 1, end).join('\n').trim()));
+            i = end;
+            continue;
+          }
+        }
+      }
+
       final heading = _heading.firstMatch(line);
       if (heading != null) {
-        headings.add(Heading(heading.group(1)!.length, heading.group(2)!, i));
+        headings.add(
+          Heading(heading.group(1)!.length, heading.group(2)!, at(i)),
+        );
       }
       text.add(line);
-      textLines.add(i);
+      textLines.add(at(i));
     }
     flush();
     return NoteDocument(

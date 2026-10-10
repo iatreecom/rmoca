@@ -1,24 +1,41 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:re_highlight/languages/all.dart';
 import 'package:re_highlight/re_highlight.dart';
 import 'package:re_highlight/styles/atom-one-dark.dart';
 import 'package:re_highlight/styles/github.dart';
 
+import '../widgets/math_view.dart';
+import '../widgets/mermaid_block.dart';
+
 /// Link scheme for `[[wikilinks]]`; the rest is the encoded target.
 const wikiScheme = 'rmoca-wiki:';
 
 /// `[[target]]`, `[[target|alias]]`, `[[target#heading]]`.
 class WikiLinkSyntax extends md.InlineSyntax {
-  WikiLinkSyntax() : super(r'\[\[([^\[\]\n|]+)(?:\|([^\[\]\n]+))?\]\]');
+  WikiLinkSyntax() : super(r'(!)?\[\[([^\[\]\n|]+)(?:\|([^\[\]\n]+))?\]\]');
+
+  static final _image = RegExp(
+    r'\.(png|jpe?g|gif|webp|bmp|svg)$',
+    caseSensitive: false,
+  );
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {
-    final target = match[1]!.trim();
-    final alias = match[2]?.trim();
+    final target = match[2]!.trim();
+    final alias = match[3]?.trim();
+    // Inline `![[photo.png|300]]` shows the image.
+    if (match[1] != null && _image.hasMatch(target)) {
+      parser.addNode(
+        md.Element.empty('img')
+          ..attributes['src'] = Uri.encodeFull(target)
+          ..attributes['alt'] = alias == null ? '' : '|$alias',
+      );
+      return true;
+    }
+    if (match[1] != null) parser.addNode(md.Text('!'));
     final display = alias ?? target.replaceFirst('#', ' › ');
     parser.addNode(
       md.Element('a', [md.Text(display)])
@@ -58,14 +75,27 @@ class TagSyntax extends md.InlineSyntax {
   }
 }
 
-/// `$inline math$` (not `$$`).
+/// Inline math: `$x$`, `\(x\)`, and `$$x$$` inside a line (display style).
+///
+/// Like Pandoc, `$` must hug its content (`$x$`, not `$ x $`) and the closing
+/// `$` may not be followed by a digit, so prices such as "$5 and $10" stay
+/// text.
 class InlineMathSyntax extends md.InlineSyntax {
   InlineMathSyntax()
-    : super(r'\$(?!\$)([^\$\n]+?)\$(?![\$\d])', startCharacter: 0x24);
+    : super(
+        r'\$\$([^\n]+?)\$\$'
+        r'|\\\(([^\n]+?)\\\)'
+        r'|\$(?![\s$])([^$\n]*?[^\s\\$])\$(?!\d)'
+        r'|\$([^\s$\\])\$(?!\d)',
+      );
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {
-    parser.addNode(md.Element.text('math', match[1]!));
+    final display = match[1] != null;
+    final tex = match[1] ?? match[2] ?? match[3] ?? match[4]!;
+    parser.addNode(
+      md.Element.text('math', tex)..attributes['display'] = '$display',
+    );
     return true;
   }
 }
@@ -147,15 +177,10 @@ class InlineMathBuilder extends MarkdownElementBuilder {
   ) => Text.rich(
     WidgetSpan(
       alignment: PlaceholderAlignment.middle,
-      child: Math.tex(
+      child: MathView(
         element.textContent,
-        mathStyle: MathStyle.text,
-        // Math defaults to black; follow the theme's text color.
-        textStyle: (parentStyle ?? const TextStyle()).copyWith(
-          color: parentStyle?.color ?? Theme.of(context).colorScheme.onSurface,
-        ),
-        onErrorFallback: (e) =>
-            Text('\$${element.textContent}\$', style: parentStyle),
+        display: element.attributes['display'] == 'true',
+        style: parentStyle,
       ),
     ),
   );
@@ -168,24 +193,7 @@ class MathBlockView extends StatelessWidget {
   final String tex;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8),
-    child: Center(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Math.tex(
-          tex,
-          mathStyle: MathStyle.display,
-          textStyle: Theme.of(context).textTheme.bodyLarge
-              ?.copyWith(color: Theme.of(context).colorScheme.onSurface),
-          onErrorFallback: (e) => Text(
-            tex,
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-          ),
-        ),
-      ),
-    ),
-  );
+  Widget build(BuildContext context) => MathView(tex, display: true);
 }
 
 /// Fenced code with syntax highlighting.
@@ -209,6 +217,8 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
       'language-',
       '',
     );
+    if (language == 'math') return MathView(code, display: true);
+    if (language == 'mermaid') return MermaidBlock(code);
     final dark = Theme.of(context).brightness == Brightness.dark;
     final base = TextStyle(
       fontFamily: 'monospace',
