@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 
 import 'markdown/link_rewriter.dart';
+import 'markdown/note_links.dart';
 import 'models/note.dart';
 import 'models/sync_settings.dart';
 import 'services/github_remote.dart';
@@ -187,6 +188,56 @@ class AppState extends ChangeNotifier {
     if (from == to) return;
     final moves = await store.moveFolder(from, to);
     await _afterMove(moves);
+  }
+
+  // --- links and tags --------------------------------------------------------
+
+  /// Note path a `[[target]]` in [fromPath] points to, if it exists.
+  String? resolveWiki(String target, String fromPath) =>
+      resolveWikiTarget(target, fromPath, notes.map((n) => n.path));
+
+  /// Notes that link to [path] with a wikilink or a relative link.
+  List<Note> backlinksTo(String path) => notes
+      .where(
+        (n) =>
+            n.path != path &&
+            (n.links.paths.contains(path) ||
+                n.links.wikiTargets.any((t) => resolveWiki(t, n.path) == path)),
+      )
+      .toList();
+
+  /// Every tag with its note count; `a/b` also counts towards `a`.
+  Map<String, int> get tagCounts {
+    final counts = <String, int>{};
+    for (final n in notes) {
+      final all = <String>{};
+      for (final t in n.links.tags) {
+        final parts = t.split('/');
+        for (var i = 1; i <= parts.length; i++) {
+          all.add(parts.sublist(0, i).join('/'));
+        }
+      }
+      for (final t in all) {
+        counts[t] = (counts[t] ?? 0) + 1;
+      }
+    }
+    return Map.fromEntries(
+      counts.entries.toList()
+        ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase())),
+    );
+  }
+
+  /// Notes tagged [tag] or a nested tag under it.
+  List<Note> notesWithTag(String tag) {
+    final lower = tag.toLowerCase();
+    return notes
+        .where(
+          (n) => n.links.tags.any((t) {
+            final l = t.toLowerCase();
+            return l == lower || l.startsWith('$lower/');
+          }),
+        )
+        .toList();
   }
 
   /// Notes directly inside [folder] ('' = root).

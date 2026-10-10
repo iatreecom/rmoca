@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
@@ -10,6 +11,7 @@ import '../models/note.dart';
 import '../widgets/sync_indicator.dart';
 import 'drawing_screen.dart';
 import 'markdown_screen.dart';
+import 'navigation.dart';
 
 /// Note browser: folders as a tree, notes as cards or a list.
 class HomeScreen extends StatefulWidget {
@@ -61,10 +63,26 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _newNote() async {
     final app = context.read<AppState>();
     final stamp = DateFormat('yyyy-MM-dd HHmm').format(DateTime.now());
-    final name = await _askName(title: '새 메모', initial: '메모 $stamp');
-    if (name == null || !mounted) return;
+    final templates = templatesOf(app);
+    final result = await showDialog<(String, Note?)>(
+      context: context,
+      builder: (_) =>
+          _NewNoteDialog(initialName: '메모 $stamp', templates: templates),
+    );
+    if (result == null || !mounted) return;
+    final (name, template) = result;
     final path = await app.newNotePath(name, 'md', folder: _folder);
-    await app.saveText(path, '# ${p.posix.basenameWithoutExtension(path)}\n\n');
+    final title = p.posix.basenameWithoutExtension(path);
+    await app.saveText(
+      path,
+      template == null
+          ? '# $title\n\n'
+          : applyTemplate(
+              await app.store.readText(template.path),
+              title,
+              DateTime.now(),
+            ),
+    );
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -316,35 +334,48 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_folder.isNotEmpty && !app.folders.contains(_folder)) {
       _folder = '';
     }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 840;
-        final content = _Content(
-          state: this,
-          app: app,
-          wide: wide,
-          width: constraints.maxWidth - (wide ? 280 : 0),
-        );
-        return Scaffold(
-          body: wide
-              ? Row(
-                  children: [
-                    SizedBox(
-                      width: 280,
-                      child: _Sidebar(state: this, app: app),
-                    ),
-                    const VerticalDivider(width: 1),
-                    Expanded(child: content),
-                  ],
-                )
-              : content,
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: _showCreateMenu,
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('새로 만들기'),
-          ),
-        );
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
+            showQuickSwitcher(context),
+        const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
+            showQuickSwitcher(context),
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true): _newNote,
+        const SingleActivator(LogicalKeyboardKey.keyN, meta: true): _newNote,
       },
+      child: Focus(
+        autofocus: true,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 840;
+            final content = _Content(
+              state: this,
+              app: app,
+              wide: wide,
+              width: constraints.maxWidth - (wide ? 280 : 0),
+            );
+            return Scaffold(
+              body: wide
+                  ? Row(
+                      children: [
+                        SizedBox(
+                          width: 280,
+                          child: _Sidebar(state: this, app: app),
+                        ),
+                        const VerticalDivider(width: 1),
+                        Expanded(child: content),
+                      ],
+                    )
+                  : content,
+              floatingActionButton: FloatingActionButton.extended(
+                onPressed: _showCreateMenu,
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('새로 만들기'),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }
@@ -412,6 +443,18 @@ class _Content extends StatelessWidget {
                 ),
                 onPressed: () => state.update(() => state._grid = !state._grid),
               ),
+              if (!wide) ...[
+                IconButton(
+                  tooltip: '오늘의 노트',
+                  icon: const Icon(Icons.today_rounded),
+                  onPressed: () => openDailyNote(context),
+                ),
+                IconButton(
+                  tooltip: '태그',
+                  icon: const Icon(Icons.tag_rounded),
+                  onPressed: () => _showTags(context, app),
+                ),
+              ],
               const SyncIndicator(),
               if (!wide)
                 IconButton(
@@ -517,6 +560,36 @@ class _Content extends StatelessWidget {
               ),
           ],
         ],
+      ),
+    );
+  }
+
+  void _showTags(BuildContext context, AppState app) {
+    final tags = app.tagCounts;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: tags.isEmpty
+              ? const Text('아직 태그가 없습니다. 메모에 #태그 를 적어 보세요.')
+              : Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final e in tags.entries)
+                      ActionChip(
+                        avatar: const Icon(Icons.tag_rounded, size: 16),
+                        label: Text('${e.key}  ${e.value}'),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          openTag(context, e.key);
+                        },
+                      ),
+                  ],
+                ),
+        ),
       ),
     );
   }
@@ -647,8 +720,37 @@ class _Sidebar extends StatelessWidget {
                     selected: state._folder.isEmpty,
                     onTap: () => state._openFolder(''),
                   ),
-                  const SizedBox(height: 4),
+                  _TreeRow(
+                    icon: Icons.today_rounded,
+                    label: '오늘의 노트',
+                    count: null,
+                    depth: 0,
+                    selected: false,
+                    onTap: () => openDailyNote(context),
+                  ),
+                  _TreeRow(
+                    icon: Icons.search_rounded,
+                    label: '빠른 이동',
+                    trailing: 'Ctrl K',
+                    count: null,
+                    depth: 0,
+                    selected: false,
+                    onTap: () => showQuickSwitcher(context),
+                  ),
+                  const _SidebarHeader('폴더'),
                   ..._tree(context, ''),
+                  if (app.tagCounts.isNotEmpty) ...[
+                    const _SidebarHeader('태그'),
+                    for (final e in app.tagCounts.entries)
+                      _TreeRow(
+                        icon: Icons.tag_rounded,
+                        label: e.key.split('/').last,
+                        count: e.value,
+                        depth: e.key.split('/').length,
+                        selected: false,
+                        onTap: () => openTag(context, e.key),
+                      ),
+                  ],
                 ],
               ),
             ),
@@ -706,11 +808,13 @@ class _TreeRow extends StatelessWidget {
     required this.onTap,
     this.expanded,
     this.onToggle,
+    this.trailing,
   });
 
   final IconData icon;
   final String label;
-  final int count;
+  final int? count;
+  final String? trailing;
   final int depth;
   final bool selected;
   final VoidCallback onTap;
@@ -768,7 +872,7 @@ class _TreeRow extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  '$count',
+                  trailing ?? (count == null ? '' : '$count'),
                   style: Theme.of(context).textTheme.labelSmall
                       ?.copyWith(color: scheme.outline),
                 ),
@@ -780,6 +884,24 @@ class _TreeRow extends StatelessWidget {
       ),
     );
   }
+}
+
+class _SidebarHeader extends StatelessWidget {
+  const _SidebarHeader(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(14, 18, 14, 6),
+    child: Text(
+      label,
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+        color: Theme.of(context).colorScheme.outline,
+        letterSpacing: 0.5,
+      ),
+    ),
+  );
 }
 
 class _Logo extends StatelessWidget {
@@ -1189,6 +1311,74 @@ class _CreateTile extends StatelessWidget {
       onTap: onTap,
     );
   }
+}
+
+/// Name + optional template for a new memo.
+class _NewNoteDialog extends StatefulWidget {
+  const _NewNoteDialog({required this.initialName, required this.templates});
+
+  final String initialName;
+  final List<Note> templates;
+
+  @override
+  State<_NewNoteDialog> createState() => _NewNoteDialogState();
+}
+
+class _NewNoteDialogState extends State<_NewNoteDialog> {
+  late final _name = TextEditingController(text: widget.initialName)
+    ..selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: widget.initialName.length,
+    );
+  Note? _template;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  void _submit() => Navigator.pop(context, (_name.text, _template));
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('새 메모'),
+    content: SizedBox(
+      width: 400,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _name,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: '이름'),
+            onSubmitted: (_) => _submit(),
+          ),
+          if (widget.templates.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            DropdownButtonFormField<Note?>(
+              initialValue: _template,
+              decoration: const InputDecoration(labelText: '템플릿'),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('빈 메모')),
+                for (final t in widget.templates)
+                  DropdownMenuItem(value: t, child: Text(t.title)),
+              ],
+              onChanged: (t) => setState(() => _template = t),
+            ),
+          ],
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      FilledButton(onPressed: _submit, child: const Text('만들기')),
+    ],
+  );
 }
 
 /// Name + storage mode for a new drawing.

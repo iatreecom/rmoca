@@ -2,6 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
+import 'package:rmoca/screens/navigation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -18,6 +21,8 @@ import 'package:rmoca/services/settings_repository.dart';
 void main() {
   late Directory dir;
   late AppState app;
+
+  setUpAll(() => initializeDateFormatting('ko'));
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -158,5 +163,123 @@ void main() {
     await settle(tester);
     expect(find.byType(SvgPicture), findsOneWidget);
     expect(find.textContaining('<svg'), findsNothing);
+  });
+
+  testWidgets('renders Obsidian markdown and toggles tasks', (tester) async {
+    tester.view.physicalSize = const Size(1000, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const src = r'''# Rich
+Link to [[Other]] and #tag and ==marked== and $x^2$.
+
+> [!tip] Tip title
+> body text
+
+| a | b |
+| - | - |
+| 1 | 2 |
+
+```dart
+void main() {}
+```
+
+- [ ] task one
+''';
+    await tester.runAsync(() async {
+      await app.store.writeText('rich.md', src);
+      await app.store.writeText('Other.md', '# Other\n\nsee [[rich]]');
+      await app.refreshNotes();
+    });
+    await tester.pumpWidget(wrap(const MarkdownScreen(path: 'rich.md')));
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(find.text('Tip title'), findsOneWidget);
+    expect(find.textContaining('백링크 1'), findsOneWidget);
+
+    // Tick the checkbox in the preview: the source changes.
+    await tester.tap(find.byKey(const ValueKey('task-checkbox')));
+    await tester.pump();
+    await tester.pumpWidget(wrap(const SizedBox()));
+    await settle(tester);
+    final saved = await tester.runAsync(() => app.store.readText('rich.md'));
+    expect(saved, contains('- [x] task one'));
+  });
+
+  testWidgets('Enter continues lists and ends them on an empty item', (
+    tester,
+  ) async {
+    await tester.runAsync(() => app.store.writeText('l.md', '- [ ] one'));
+    await tester.pumpWidget(
+      wrap(const MarkdownScreen(path: 'l.md', startEditing: true)),
+    );
+    await settle(tester);
+    final field = find.byType(TextField).last;
+    final editable = tester.widget<TextField>(field).controller!;
+    editable.selection = const TextSelection.collapsed(offset: 9);
+    await tester.showKeyboard(field);
+    tester.testTextInput.updateEditingValue(
+      const TextEditingValue(
+        text: '- [ ] one\n',
+        selection: TextSelection.collapsed(offset: 10),
+      ),
+    );
+    await tester.pump();
+    expect(editable.text, '- [ ] one\n- [ ] ');
+
+    // Enter on the empty item removes the bullet.
+    tester.testTextInput.updateEditingValue(
+      const TextEditingValue(
+        text: '- [ ] one\n- [ ] \n',
+        selection: TextSelection.collapsed(offset: 17),
+      ),
+    );
+    await tester.pump();
+    expect(editable.text, '- [ ] one\n');
+  });
+
+  testWidgets('daily note is created in Daily/', (tester) async {
+    await tester.pumpWidget(
+      wrap(
+        Builder(
+          builder: (context) => TextButton(
+            onPressed: () => openDailyNote(context),
+            child: const Text('daily'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('daily'));
+    for (var i = 0; i < 4; i++) {
+      await settle(tester);
+    }
+    final name = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final exists = await tester.runAsync(
+      () => app.store.exists('Daily/$name.md'),
+    );
+    expect(exists, isTrue);
+  });
+
+  testWidgets('quick switcher finds notes by fuzzy name', (tester) async {
+    await tester.runAsync(() async {
+      await app.store.writeText('work/Project plan.md', 'x');
+      await app.store.writeText('Shopping.md', 'y');
+      await app.refreshNotes();
+    });
+    await tester.pumpWidget(
+      wrap(
+        Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showQuickSwitcher(context),
+            child: const Text('go'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('go'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'prjpl');
+    await tester.pumpAndSettle();
+    expect(find.text('Project plan'), findsOneWidget);
+    expect(find.text('Shopping'), findsNothing);
   });
 }

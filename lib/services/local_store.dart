@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../markdown/embedded_drawings.dart';
+import '../markdown/note_links.dart';
 import '../models/note.dart';
 import 'git_hash.dart';
 
@@ -103,6 +104,7 @@ class LocalStore {
             p.basenameWithoutExtension(entity.path),
           ),
           embeddedSvg: EmbeddedDrawings.firstSvg(text),
+          links: NoteLinks.extract(rel, text),
         ),
       );
     }
@@ -275,6 +277,8 @@ class LocalStore {
   }
 
   static String _preview(String text, String title) {
+    // Skip YAML frontmatter.
+    text = text.replaceFirst(RegExp(r'^---\n[\s\S]*?\n---\n?'), '');
     for (final line in const LineSplitter().convert(text)) {
       final trimmed = line
           .replaceFirst(RegExp(r'^[#>\-*+\s]+(\[[ xX]\]\s*)?'), '')

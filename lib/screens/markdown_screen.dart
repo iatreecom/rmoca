@@ -1,20 +1,21 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../markdown/embedded_drawings.dart';
 import '../markdown/link_rewriter.dart';
+import '../markdown/note_document.dart';
 import '../models/note.dart';
+import '../widgets/note_view.dart';
 import '../widgets/sync_indicator.dart';
 import 'drawing_screen.dart';
+import 'navigation.dart';
 
-/// Markdown editor with live preview; saves automatically.
+/// Markdown editor with a rendered preview; saves automatically.
 class MarkdownScreen extends StatefulWidget {
   const MarkdownScreen({
     super.key,
@@ -37,6 +38,8 @@ class MarkdownScreen extends StatefulWidget {
 class _MarkdownScreenState extends State<MarkdownScreen> {
   final _text = TextEditingController();
   final _focus = FocusNode();
+  final _scroll = ScrollController();
+  final Map<int, GlobalKey> _headingKeys = {};
   late bool _editing = widget.startEditing;
   bool _loading = true;
   bool _dirty = false;
@@ -63,8 +66,11 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     if (_dirty) _save();
     _text.dispose();
     _focus.dispose();
+    _scroll.dispose();
     super.dispose();
   }
+
+  // --- load / save -----------------------------------------------------------
 
   Future<void> _load() async {
     final store = _app.store;
@@ -93,11 +99,17 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
   }
 
   void _onChanged() {
-    // The listener also fires for cursor moves; only real edits count.
-    if (_text.text == _lastText) return;
-    _lastText = _text.text;
+    final text = _text.text;
+    if (text == _lastText) {
+      // Cursor moves still matter for [[ suggestions.
+      if (_editing) setState(() {});
+      return;
+    }
+    final previous = _lastText;
+    _lastText = text;
+    if (_continueList(previous)) return;
     _dirty = true;
-    setState(() {}); // Refresh the live preview.
+    setState(() {}); // Refresh the preview.
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 800), _save);
   }
@@ -106,6 +118,47 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     if (!_dirty) return;
     _dirty = false;
     await _app.saveText(widget.path, _text.text);
+  }
+
+  // --- editing helpers -------------------------------------------------------
+
+  static final _listItem = RegExp(
+    r'^(\s*)([-*+]|(\d+)([.)]))(\s+\[[ xX]\])?\s+(.*)$',
+  );
+
+  /// After Enter on a list item, starts the next item (or ends the list
+  /// when the item was empty), like Obsidian.
+  bool _continueList(String previous) {
+    final text = _text.text;
+    final sel = _text.selection;
+    if (!sel.isCollapsed || text.length != previous.length + 1) return false;
+    final pos = sel.start;
+    if (pos < 1 || text[pos - 1] != '\n') return false;
+    if (text.substring(0, pos - 1) != previous.substring(0, pos - 1)) {
+      return false;
+    }
+    final lineStart = text.lastIndexOf('\n', pos - 2) + 1;
+    final line = text.substring(lineStart, pos - 1);
+    final m = _listItem.firstMatch(line);
+    if (m == null) return false;
+
+    if (m[6]!.trim().isEmpty) {
+      // Empty item: remove its bullet instead of adding another.
+      _text.value = TextEditingValue(
+        text: text.substring(0, lineStart) + text.substring(pos),
+        selection: TextSelection.collapsed(offset: lineStart),
+      );
+      return true;
+    }
+    final number = m[3] == null ? null : int.parse(m[3]!) + 1;
+    final bullet = number == null ? m[2]! : '$number${m[4]}';
+    final task = m[5] == null ? '' : ' [ ]';
+    final prefix = '${m[1]}$bullet$task ';
+    _text.value = TextEditingValue(
+      text: text.substring(0, pos) + prefix + text.substring(pos),
+      selection: TextSelection.collapsed(offset: pos + prefix.length),
+    );
+    return true;
   }
 
   void _wrap(String before, [String after = '']) {
@@ -146,6 +199,48 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     _focus.requestFocus();
   }
 
+  void _insertBlock(String block) {
+    final sel = _text.selection;
+    final text = _text.text;
+    final pos = sel.isValid ? sel.start : text.length;
+    final before = text.substring(0, pos);
+    final lead = before.isEmpty || before.endsWith('\n\n')
+        ? ''
+        : (before.endsWith('\n') ? '\n' : '\n\n');
+    final inserted = '$lead$block\n';
+    _text.value = TextEditingValue(
+      text: before + inserted + text.substring(pos),
+      selection: TextSelection.collapsed(offset: pos + inserted.length),
+    );
+    _focus.requestFocus();
+  }
+
+  /// `[[partial` right before the cursor, if any.
+  String? get _wikiQuery {
+    final sel = _text.selection;
+    if (!_editing || !sel.isValid || !sel.isCollapsed) return null;
+    final before = _text.text.substring(0, sel.start);
+    return RegExp(r'\[\[([^\[\]\n|#]*)$').firstMatch(before)?[1];
+  }
+
+  void _completeWiki(String name) {
+    final sel = _text.selection;
+    final text = _text.text;
+    final query = _wikiQuery ?? '';
+    final start = sel.start - query.length;
+    final after = text.substring(sel.start);
+    final close = after.startsWith(']]') ? '' : ']]';
+    _text.value = TextEditingValue(
+      text: text.substring(0, start) + name + close + after,
+      selection: TextSelection.collapsed(
+        offset: start + name.length + (close.isEmpty ? 2 : close.length),
+      ),
+    );
+    _focus.requestFocus();
+  }
+
+  // --- drawings --------------------------------------------------------------
+
   Future<void> _insertDrawing() async {
     final drawings = _app.notes
         .where((n) => n.kind == NoteKind.drawing)
@@ -153,6 +248,7 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     final choice = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
+      showDragHandle: true,
       builder: (context) => SafeArea(
         child: ConstrainedBox(
           constraints: BoxConstraints(
@@ -161,9 +257,9 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
           child: ListView(
             shrinkWrap: true,
             children: [
-              const ListTile(title: Text('새 그림')),
+              const _SheetHeader('새 그림'),
               ListTile(
-                leading: const Icon(Icons.code),
+                leading: const Icon(Icons.code_rounded),
                 title: const Text('메모 안에 넣기'),
                 subtitle: const Text('<svg> 코드를 이 .md 파일에 직접 넣습니다'),
                 onTap: () => Navigator.pop(context, ':embedded'),
@@ -176,10 +272,10 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
               ),
               if (drawings.isNotEmpty) ...[
                 const Divider(),
-                const ListTile(title: Text('기존 SVG 파일 링크')),
+                const _SheetHeader('기존 SVG 파일 링크'),
                 for (final d in drawings)
                   ListTile(
-                    leading: const Icon(Icons.brush_outlined),
+                    leading: const Icon(Icons.draw_outlined),
                     title: Text(d.title),
                     subtitle: d.folder.isEmpty ? null : Text(d.folder),
                     onTap: () => Navigator.pop(context, d.path),
@@ -259,236 +355,456 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     );
   }
 
-  String get _noteDir {
-    final d = p.posix.dirname(widget.path);
-    return d == '.' ? '' : d;
-  }
+  String get _noteDir => Note.parentOf(widget.path);
 
-  /// Resolves a link inside the note to a note path, if it points to one.
-  String? _resolveLocal(Uri uri) {
-    if (uri.hasScheme) return null;
-    final joined = p.posix.normalize(
-      p.posix.join(_noteDir.isEmpty ? '.' : _noteDir, Uri.decodeFull(uri.path)),
-    );
-    if (joined.startsWith('..')) return null;
-    return joined;
-  }
+  // --- outline ---------------------------------------------------------------
 
-  Widget _image(Uri uri, String? title, String? alt) {
-    final local = _resolveLocal(uri);
-    if (local != null) {
-      final file = _app.store.fileFor(local);
-      if (!file.existsSync()) return Text('[그림 없음: ${alt ?? local}]');
-      final child = local.toLowerCase().endsWith('.svg')
-          ? SvgPicture.file(file, fit: BoxFit.contain)
-          : Image.file(file);
-      return GestureDetector(
-        onTap: local.toLowerCase().endsWith('.svg')
-            ? () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => DrawingScreen(path: local)),
+  Future<void> _showOutline() async {
+    final headings = NoteDocument.parse(_text.text).headings;
+    final line = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: headings.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.all(32),
+                child: Text('제목(#)이 없습니다'),
               )
-            : null,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 480),
-          child: child,
-        ),
-      );
-    }
-    return Image.network(
-      uri.toString(),
-      errorBuilder: (_, _, _) => Text('[이미지: ${alt ?? uri}]'),
+            : ListView(
+                shrinkWrap: true,
+                children: [
+                  const _SheetHeader('목차'),
+                  for (final h in headings)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.only(
+                        left: 16.0 + (h.level - 1) * 18,
+                        right: 16,
+                      ),
+                      leading: Text(
+                        'H${h.level}',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.outline,
+                          fontSize: 12,
+                        ),
+                      ),
+                      title: Text(h.text),
+                      onTap: () => Navigator.pop(context, h.line),
+                    ),
+                ],
+              ),
+      ),
     );
+    if (line == null || !mounted) return;
+    if (_editing && MediaQuery.sizeOf(context).width < 900) {
+      setState(() => _editing = false);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _headingKeys[line]?.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
   }
 
-  void _openLink(String text, String? href, String title) {
-    if (href == null) return;
-    final local = _resolveLocal(Uri.parse(href));
-    if (local == null || !Note.isNotePath(local)) return;
-    if (!File(_app.store.fileFor(local).path).existsSync()) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => Note.isDrawingPath(local)
-            ? DrawingScreen(path: local)
-            : MarkdownScreen(path: local),
+  // --- build -----------------------------------------------------------------
+
+  NoteViewActions get _actions => NoteViewActions(
+    openPath: (path) => openNote(context, path),
+    openTag: (tag) => openTag(context, tag),
+    openMissingWiki: (target) => createFromWiki(context, target, widget.path),
+    toggleTask: (line) {
+      _text.text = NoteDocument.toggleTask(_text.text, line);
+    },
+    editDrawing: _editEmbedded,
+  );
+
+  Widget _preview() {
+    final backlinks = context.watch<AppState>().backlinksTo(widget.path);
+    return SingleChildScrollView(
+      controller: _scroll,
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 80),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 780),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              NoteView(
+                source: _text.text,
+                notePath: widget.path,
+                actions: _actions,
+                headingKeys: _headingKeys,
+              ),
+              if (backlinks.isNotEmpty) _Backlinks(notes: backlinks),
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  Widget _preview() {
-    final segments = EmbeddedDrawings.split(_text.text)
-        .where((s) => s.isSvg || s.text!.trim().isNotEmpty)
-        .toList();
-    return ListView(
-      padding: const EdgeInsets.all(20),
+  Widget _editor() {
+    final scheme = Theme.of(context).colorScheme;
+    final query = _wikiQuery;
+    final suggestions = query == null
+        ? const <Note>[]
+        : _app.notes
+              .where(
+                (n) =>
+                    n.path != widget.path &&
+                    n.title.toLowerCase().contains(query.toLowerCase()),
+              )
+              .take(8)
+              .toList();
+    final words = EmbeddedDrawings.textOnly(_text.text);
+    final wordCount = RegExp(r'\S+').allMatches(words).length;
+    return Column(
       children: [
-        for (final s in segments)
-          if (s.isSvg)
-            _EmbeddedDrawingView(
-              svg: s.svg!,
-              onEdit: s.id == null ? null : () => _editEmbedded(s.id!, s.svg),
-            )
-          else
-            MarkdownBody(
-              data: s.text!,
-              selectable: true,
-              imageBuilder: _image,
-              onTapLink: _openLink,
+        _Toolbar(
+          items: [
+            _Tool(Icons.title_rounded, '제목', () => _linePrefix('## ')),
+            _Tool(Icons.format_bold_rounded, '굵게', () => _wrap('**', '**')),
+            _Tool(Icons.format_italic_rounded, '기울임', () => _wrap('*', '*')),
+            _Tool(
+              Icons.format_strikethrough_rounded,
+              '취소선',
+              () => _wrap('~~', '~~'),
             ),
+            _Tool(Icons.border_color_rounded, '형광펜', () => _wrap('==', '==')),
+            null,
+            _Tool(
+              Icons.format_list_bulleted_rounded,
+              '목록',
+              () => _linePrefix('- '),
+            ),
+            _Tool(
+              Icons.format_list_numbered_rounded,
+              '번호 목록',
+              () => _linePrefix('1. '),
+            ),
+            _Tool(
+              Icons.check_box_outlined,
+              '체크리스트',
+              () => _linePrefix('- [ ] '),
+            ),
+            _Tool(Icons.format_quote_rounded, '인용', () => _linePrefix('> ')),
+            null,
+            _Tool(Icons.link_rounded, '메모 링크 [[ ]]', () => _wrap('[[', ']]')),
+            _Tool(Icons.tag_rounded, '태그', () => _wrap('#')),
+            _Tool(Icons.code_rounded, '코드', () => _wrap('`', '`')),
+            _Tool(
+              Icons.lightbulb_outline_rounded,
+              '콜아웃',
+              () => _insertBlock('> [!note] 제목\n> 내용'),
+            ),
+            _Tool(
+              Icons.table_chart_outlined,
+              '표',
+              () => _insertBlock('| 항목 | 내용 |\n| --- | --- |\n|  |  |'),
+            ),
+            _Tool(Icons.functions_rounded, '수식', () => _wrap(r'$', r'$')),
+            _Tool(Icons.draw_rounded, '그림 삽입', _insertDrawing),
+          ],
+        ),
+        if (suggestions.isNotEmpty || (query?.isNotEmpty ?? false))
+          Container(
+            height: 48,
+            color: scheme.surfaceContainerLow,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              children: [
+                for (final n in suggestions)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ActionChip(
+                      avatar: Icon(
+                        n.kind == NoteKind.drawing
+                            ? Icons.draw_outlined
+                            : Icons.description_outlined,
+                        size: 16,
+                      ),
+                      label: Text(n.title),
+                      onPressed: () => _completeWiki(
+                        n.kind == NoteKind.drawing
+                            ? p.posix.basename(n.path)
+                            : n.title,
+                      ),
+                    ),
+                  ),
+                if (query != null &&
+                    query.isNotEmpty &&
+                    !suggestions.any((n) => n.title == query))
+                  ActionChip(
+                    avatar: const Icon(Icons.add_rounded, size: 16),
+                    label: Text("새 메모 '$query'"),
+                    onPressed: () => _completeWiki(query),
+                  ),
+              ],
+            ),
+          ),
+        const Divider(height: 1),
+        Expanded(
+          child: TextField(
+            controller: _text,
+            focusNode: _focus,
+            maxLines: null,
+            expands: true,
+            keyboardType: TextInputType.multiline,
+            textAlignVertical: TextAlignVertical.top,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontFamilyFallback: ['Menlo', 'Consolas', 'Roboto Mono'],
+              fontSize: 15,
+              height: 1.6,
+            ),
+            decoration: const InputDecoration(
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.fromLTRB(24, 20, 24, 20),
+              hintText:
+                  '# 제목\n\n마크다운으로 메모를 작성하세요…\n[[다른 메모]] 로 연결하고 #태그 를 붙일 수 있습니다',
+            ),
+          ),
+        ),
+        Container(
+          height: 28,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          alignment: Alignment.centerRight,
+          color: scheme.surfaceContainerLow,
+          child: Text(
+            '단어 $wordCount · 글자 ${words.replaceAll(RegExp(r'\s'), '').length}',
+            style: Theme.of(context).textTheme.labelSmall
+                ?.copyWith(color: scheme.outline),
+          ),
+        ),
       ],
     );
   }
 
-  Widget _editor() => Column(
-    children: [
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            IconButton(
-              tooltip: '제목',
-              icon: const Icon(Icons.title),
-              onPressed: () => _linePrefix('## '),
-            ),
-            IconButton(
-              tooltip: '굵게',
-              icon: const Icon(Icons.format_bold),
-              onPressed: () => _wrap('**', '**'),
-            ),
-            IconButton(
-              tooltip: '기울임',
-              icon: const Icon(Icons.format_italic),
-              onPressed: () => _wrap('_', '_'),
-            ),
-            IconButton(
-              tooltip: '목록',
-              icon: const Icon(Icons.format_list_bulleted),
-              onPressed: () => _linePrefix('- '),
-            ),
-            IconButton(
-              tooltip: '체크리스트',
-              icon: const Icon(Icons.check_box_outlined),
-              onPressed: () => _linePrefix('- [ ] '),
-            ),
-            IconButton(
-              tooltip: '코드',
-              icon: const Icon(Icons.code),
-              onPressed: () => _wrap('`', '`'),
-            ),
-            IconButton(
-              tooltip: '그림 삽입',
-              icon: const Icon(Icons.brush_outlined),
-              onPressed: _insertDrawing,
-            ),
-          ],
-        ),
-      ),
-      const Divider(height: 1),
-      Expanded(
-        child: TextField(
-          controller: _text,
-          focusNode: _focus,
-          maxLines: null,
-          expands: true,
-          keyboardType: TextInputType.multiline,
-          textAlignVertical: TextAlignVertical.top,
-          style: const TextStyle(
-            fontFamily: 'monospace',
-            fontFamilyFallback: ['Menlo', 'Consolas', 'Roboto Mono'],
-            height: 1.5,
-          ),
-          decoration: const InputDecoration(
-            border: InputBorder.none,
-            contentPadding: EdgeInsets.all(20),
-            hintText: '# 제목\n\n마크다운으로 메모를 작성하세요…',
-          ),
-        ),
-      ),
-    ],
-  );
+  void _toggleMode() {
+    setState(() => _editing = !_editing);
+    if (_editing) _focus.requestFocus();
+    _save();
+  }
 
   @override
   Widget build(BuildContext context) {
     final title = p.posix.basenameWithoutExtension(widget.path);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 900;
-        Widget body;
-        if (_loading) {
-          body = const Center(child: CircularProgressIndicator());
-        } else if (wide && _editing) {
-          body = Row(
-            children: [
-              Expanded(child: _editor()),
-              const VerticalDivider(width: 1),
-              Expanded(child: _preview()),
-            ],
-          );
-        } else {
-          body = _editing ? _editor() : _preview();
-        }
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(title),
-            actions: [
-              IconButton(
-                tooltip: _editing ? '읽기' : '편집',
-                icon: Icon(
-                  _editing ? Icons.visibility_outlined : Icons.edit_outlined,
-                ),
-                onPressed: () {
-                  setState(() => _editing = !_editing);
-                  if (_editing) _focus.requestFocus();
-                  _save();
-                },
-              ),
-              const SyncIndicator(),
-            ],
-          ),
-          body: SafeArea(top: false, child: body),
-        );
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyE, control: true):
+            _toggleMode,
+        const SingleActivator(LogicalKeyboardKey.keyE, meta: true): _toggleMode,
+        const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
+            showQuickSwitcher(context),
+        const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
+            showQuickSwitcher(context),
+        const SingleActivator(LogicalKeyboardKey.keyB, control: true): () =>
+            _wrap('**', '**'),
+        const SingleActivator(LogicalKeyboardKey.keyB, meta: true): () =>
+            _wrap('**', '**'),
+        const SingleActivator(LogicalKeyboardKey.keyI, control: true): () =>
+            _wrap('*', '*'),
+        const SingleActivator(LogicalKeyboardKey.keyI, meta: true): () =>
+            _wrap('*', '*'),
       },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 900;
+          Widget body;
+          if (_loading) {
+            body = const Center(child: CircularProgressIndicator());
+          } else if (wide && _editing) {
+            body = Row(
+              children: [
+                Expanded(child: _editor()),
+                const VerticalDivider(width: 1),
+                Expanded(child: _preview()),
+              ],
+            );
+          } else {
+            body = _editing ? _editor() : _preview();
+          }
+          return Scaffold(
+            appBar: AppBar(
+              titleSpacing: 0,
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  if (_noteDir.isNotEmpty)
+                    Text(
+                      _noteDir,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                    ),
+                ],
+              ),
+              actions: [
+                IconButton(
+                  tooltip: '목차',
+                  icon: const Icon(Icons.toc_rounded),
+                  onPressed: _showOutline,
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: SegmentedButton<bool>(
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        icon: Icon(Icons.chrome_reader_mode_outlined, size: 18),
+                        tooltip: '읽기 (Ctrl+E)',
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        icon: Icon(Icons.edit_outlined, size: 18),
+                        tooltip: '편집 (Ctrl+E)',
+                      ),
+                    ],
+                    selected: {_editing},
+                    onSelectionChanged: (s) {
+                      if (s.first != _editing) _toggleMode();
+                    },
+                  ),
+                ),
+                const SyncIndicator(),
+                const SizedBox(width: 4),
+              ],
+            ),
+            body: SafeArea(top: false, child: body),
+          );
+        },
+      ),
     );
   }
 }
 
-/// An inline `<svg>` drawing in the preview; tap to edit rmoca drawings.
-class _EmbeddedDrawingView extends StatelessWidget {
-  const _EmbeddedDrawingView({required this.svg, this.onEdit});
+class _Tool {
+  const _Tool(this.icon, this.tooltip, this.onPressed);
 
-  final String svg;
-  final VoidCallback? onEdit;
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+}
+
+/// Formatting buttons; null entries are separators.
+class _Toolbar extends StatelessWidget {
+  const _Toolbar({required this.items});
+
+  final List<_Tool?> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        children: [
+          for (final item in items)
+            if (item == null)
+              VerticalDivider(
+                indent: 12,
+                endIndent: 12,
+                width: 12,
+                color: scheme.outlineVariant,
+              )
+            else
+              IconButton(
+                tooltip: item.tooltip,
+                icon: Icon(item.icon, size: 20),
+                visualDensity: VisualDensity.compact,
+                onPressed: item.onPressed,
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SheetHeader extends StatelessWidget {
+  const _SheetHeader(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+    child: Text(
+      text,
+      style: Theme.of(context).textTheme.titleMedium
+          ?.copyWith(fontWeight: FontWeight.w700),
+    ),
+  );
+}
+
+class _Backlinks extends StatelessWidget {
+  const _Backlinks({required this.notes});
+
+  final List<Note> notes;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.only(top: 32),
       child: Material(
-        color: Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: BorderSide(color: scheme.outlineVariant),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onEdit,
-          child: Stack(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 480),
-                child: Center(
-                  child: SvgPicture.string(
-                    svg,
-                    fit: BoxFit.contain,
-                    placeholderBuilder: (_) => const SizedBox(height: 48),
+              Row(
+                children: [
+                  Icon(
+                    Icons.call_received_rounded,
+                    size: 16,
+                    color: scheme.outline,
                   ),
-                ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '백링크 ${notes.length}',
+                    style: Theme.of(context).textTheme.labelLarge
+                        ?.copyWith(color: scheme.outline),
+                  ),
+                ],
               ),
-              if (onEdit != null)
-                Positioned(
-                  right: 8,
-                  top: 8,
-                  child: Icon(Icons.edit, size: 18, color: scheme.outline),
+              const SizedBox(height: 6),
+              for (final n in notes)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    Icons.description_outlined,
+                    color: scheme.primary,
+                  ),
+                  title: Text(n.title),
+                  subtitle: n.preview.isEmpty
+                      ? null
+                      : Text(
+                          n.preview,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                  onTap: () => openNote(context, n.path),
                 ),
             ],
           ),

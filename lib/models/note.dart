@@ -1,5 +1,7 @@
 import 'package:path/path.dart' as p;
 
+import '../markdown/note_links.dart';
+
 enum NoteKind { markdown, drawing }
 
 /// A memo stored as a single file: `.md` for text, `.svg` for drawings.
@@ -9,7 +11,8 @@ class Note {
     required this.modified,
     this.preview = '',
     this.embeddedSvg,
-  });
+    NoteLinks? links,
+  }) : links = links ?? NoteLinks.empty;
 
   /// Path relative to the notes root, always using `/` separators.
   final String path;
@@ -20,6 +23,9 @@ class Note {
 
   /// First drawing embedded in a markdown note, used as its thumbnail.
   final String? embeddedSvg;
+
+  /// Tags and outgoing links (markdown notes only).
+  final NoteLinks links;
 
   NoteKind get kind =>
       isDrawingPath(path) ? NoteKind.drawing : NoteKind.markdown;

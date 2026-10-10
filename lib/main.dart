@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 
 import 'app_state.dart';
@@ -11,6 +12,7 @@ import 'services/settings_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('ko');
   final store = await LocalStore.open();
   final app = AppState(store, SettingsRepository());
   await app.init();
