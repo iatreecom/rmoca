@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../markdown/embedded_drawings.dart';
 import '../markdown/note_links.dart';
 import '../models/note.dart';
+import '../models/note_meta.dart';
 import 'git_hash.dart';
 
 /// Serializes async sections so a sync never interleaves with a save.
@@ -83,12 +84,15 @@ class LocalStore {
     return File(p.joinAll([notesDir.path, ...path.split('/')]));
   }
 
-  Future<List<Note>> listNotes() async {
+  /// Notes outside hidden folders; with [trash], only the ones in `.trash`.
+  Future<List<Note>> listNotes({bool trash = false}) async {
     final notes = <Note>[];
     await for (final entity in notesDir.list(recursive: true)) {
       if (entity is! File) continue;
       final rel = _relative(entity.path);
       if (!Note.isNotePath(rel)) continue;
+      final inTrash = Note.isWithin(Note.trashFolder, rel);
+      if (trash ? !inTrash : Note.isHidden(rel)) continue;
       final stat = await entity.stat();
       if (Note.isDrawingPath(rel)) {
         notes.add(Note(path: rel, modified: stat.modified));
@@ -116,7 +120,9 @@ class LocalStore {
   Future<List<String>> listFolders() async {
     final folders = <String>[];
     await for (final entity in notesDir.list(recursive: true)) {
-      if (entity is Directory) folders.add(_relative(entity.path));
+      if (entity is! Directory) continue;
+      final rel = _relative(entity.path);
+      if (!Note.isHidden(rel)) folders.add(rel);
     }
     return folders..sort(_compareNames);
   }
@@ -165,6 +171,86 @@ class LocalStore {
       return moves;
     },
   );
+
+  // --- trash -----------------------------------------------------------------
+
+  /// Moves a note or folder into `.trash`, keeping its path so it can be
+  /// restored. Returns the path inside the trash.
+  Future<String> moveToTrash(String path, {bool folder = false}) =>
+      lock.run(() async {
+        var target = Note.join(Note.trashFolder, path);
+        if (folder) {
+          for (var i = 2; await dirFor(target).exists(); i++) {
+            target = Note.join(Note.trashFolder, '$path $i');
+          }
+          final dir = dirFor(path);
+          await dirFor(target).parent.create(recursive: true);
+          // Mark the deletion time for the 30-day purge.
+          await for (final f in dir.list(recursive: true)) {
+            if (f is File) await f.setLastModified(DateTime.now());
+          }
+          await dir.rename(dirFor(target).path);
+          await _pruneEmptyDirs(dir.parent);
+        } else {
+          target = await _uniqueUnlocked(target);
+          final file = fileFor(path);
+          await fileFor(target).parent.create(recursive: true);
+          await file.setLastModified(DateTime.now());
+          await file.rename(fileFor(target).path);
+          await _pruneEmptyDirs(file.parent);
+        }
+        return target;
+      });
+
+  /// Moves a trashed note back to where it was; returns its new path.
+  Future<String> restoreFromTrash(String trashPath) => lock.run(() async {
+    final original = trashPath.substring(Note.trashFolder.length + 1);
+    final target = await _uniqueUnlocked(original);
+    final file = fileFor(trashPath);
+    await fileFor(target).parent.create(recursive: true);
+    await file.rename(fileFor(target).path);
+    await _pruneEmptyDirs(file.parent);
+    return target;
+  });
+
+  /// Permanently deletes trashed notes older than [maxAge].
+  Future<int> purgeTrash(Duration maxAge) => lock.run(() async {
+    final dir = dirFor(Note.trashFolder);
+    if (!await dir.exists()) return 0;
+    var count = 0;
+    final cutoff = DateTime.now().subtract(maxAge);
+    await for (final f in dir.list(recursive: true)) {
+      if (f is File && (await f.lastModified()).isBefore(cutoff)) {
+        await f.delete();
+        await _pruneEmptyDirs(f.parent);
+        count++;
+      }
+    }
+    return count;
+  });
+
+  Future<String> _uniqueUnlocked(String path) async {
+    if (!await fileFor(path).exists()) return path;
+    final dir = Note.parentOf(path);
+    final base = p.posix.basenameWithoutExtension(path);
+    final ext = p.posix.extension(path);
+    for (var i = 2; ; i++) {
+      final candidate = Note.join(dir, '$base $i$ext');
+      if (!await fileFor(candidate).exists()) return candidate;
+    }
+  }
+
+  // --- synced settings -------------------------------------------------------
+
+  Future<NoteMeta> readMeta() async {
+    final file = fileFor(Note.metaPath);
+    return await file.exists()
+        ? NoteMeta.decode(await file.readAsBytes())
+        : NoteMeta();
+  }
+
+  Future<void> writeMeta(NoteMeta meta) =>
+      lock.run(() => writeBytesUnlocked(Note.metaPath, meta.encode()));
 
   Directory dirFor(String folder) {
     _checkPath(folder);

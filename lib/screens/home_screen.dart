@@ -26,6 +26,12 @@ class _HomeScreenState extends State<HomeScreen> {
   String _folder = '';
   String _query = '';
   bool _grid = true;
+
+  /// Showing favorites instead of a folder.
+  bool _favorites = false;
+
+  /// Paths selected in multi-select mode.
+  final Set<String> _selected = {};
   final Set<String> _expanded = {};
   final _search = TextEditingController();
 
@@ -41,6 +47,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void _openFolder(String folder) {
     setState(() {
       _folder = folder;
+      _favorites = false;
+      _selected.clear();
       // Reveal the folder in the sidebar tree.
       var f = folder;
       while (f.isNotEmpty) {
@@ -48,6 +56,112 @@ class _HomeScreenState extends State<HomeScreen> {
         if (f.isNotEmpty) _expanded.add(f);
       }
     });
+  }
+
+  void _showFavorites() => setState(() {
+    _favorites = true;
+    _selected.clear();
+  });
+
+  void _toggleSelect(String path) => setState(() {
+    if (!_selected.remove(path)) _selected.add(path);
+  });
+
+  Future<void> _bulkFavorite() async {
+    final app = context.read<AppState>();
+    final allFav = _selected.every(app.isFavorite);
+    await app.setFavorite(_selected, !allFav);
+    setState(_selected.clear);
+  }
+
+  Future<void> _bulkMove() async {
+    final app = context.read<AppState>();
+    final folder = await _pickFolder(title: '${_selected.length}개 이동');
+    if (folder == null) return;
+    for (final path in _selected.toList()) {
+      if (Note.parentOf(path) == folder) continue;
+      final target = await app.store.uniquePath(
+        Note.join(folder, p.posix.basename(path)),
+      );
+      await _guard(() => app.renameNote(path, target));
+    }
+    setState(_selected.clear);
+  }
+
+  Future<void> _bulkDelete() async {
+    final paths = _selected.toList();
+    await context.read<AppState>().deleteNotes(paths);
+    setState(_selected.clear);
+    _showUndoDelete(paths.length);
+  }
+
+  void _showUndoDelete(int count) {
+    if (!mounted) return;
+    final app = context.read<AppState>();
+    final trashed = app.trash.take(count).map((n) => n.path).toList();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$count개를 휴지통으로 옮겼습니다'),
+        action: SnackBarAction(
+          label: '실행 취소',
+          onPressed: () async {
+            for (final t in trashed) {
+              await app.restoreNote(t);
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickFolderColor(String folder) async {
+    final app = context.read<AppState>();
+    const colors = [
+      Color(0xFF5B6CFF),
+      Color(0xFF0EA5E9),
+      Color(0xFF10B981),
+      Color(0xFFF59E0B),
+      Color(0xFFEF4444),
+      Color(0xFFEC4899),
+      Color(0xFF8B5CF6),
+      Color(0xFF6B7280),
+    ];
+    final current = app.folderColor(folder);
+    final picked = await showDialog<Color?>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('폴더 색상'),
+        content: Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            for (final c in colors)
+              InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () => Navigator.pop(context, c),
+                child: CircleAvatar(
+                  radius: 20,
+                  backgroundColor: c,
+                  child: current?.toARGB32() == c.toARGB32()
+                      ? const Icon(Icons.check_rounded, color: Colors.white)
+                      : null,
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, Colors.transparent),
+            child: const Text('기본 색'),
+          ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    await app.setFolderColor(
+      folder,
+      picked == Colors.transparent ? null : picked,
+    );
   }
 
   Future<void> _open(Note note) => Navigator.of(context).push(
@@ -204,11 +318,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _deleteNote(Note note) async {
-    final ok = await _confirm(
-      '메모 삭제',
-      "'${note.title}'을(를) 삭제할까요? 동기화되면 저장소에서도 삭제됩니다.",
-    );
-    if (ok && mounted) await context.read<AppState>().deleteNote(note.path);
+    await context.read<AppState>().deleteNote(note.path);
+    _showUndoDelete(1);
   }
 
   Future<void> _renameFolder(String folder) async {
@@ -245,8 +356,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final count = app.countUnder(folder);
     final ok = await _confirm(
       '폴더 삭제',
-      "'${p.posix.basename(folder)}' 폴더${count > 0 ? '와 안에 있는 메모 $count개' : ''}를 삭제할까요? "
-          '동기화되면 저장소에서도 삭제됩니다.',
+      "'${p.posix.basename(folder)}' 폴더${count > 0 ? '와 안에 있는 메모 $count개' : ''}를 "
+          '휴지통으로 옮길까요? 30일 동안 복원할 수 있습니다.',
     );
     if (!ok || !mounted) return;
     if (Note.isWithin(folder, _folder)) _openFolder(Note.parentOf(folder));
@@ -400,8 +511,14 @@ class _Content extends StatelessWidget {
     final folder = state._folder;
     final q = state._query.trim().toLowerCase();
     final searching = q.isNotEmpty;
-    final folders = searching ? <String>[] : app.subfolders(folder);
-    final notes = searching
+    final favorites = state._favorites;
+    final selecting = state._selected.isNotEmpty;
+    final folders = searching || favorites
+        ? <String>[]
+        : app.subfolders(folder);
+    final notes = favorites && !searching
+        ? app.favorites
+        : searching
         ? app.notes
               .where(
                 (n) =>
@@ -421,49 +538,138 @@ class _Content extends StatelessWidget {
             pinned: true,
             floating: true,
             toolbarHeight: 64,
-            titleSpacing: folder.isEmpty || wide ? 20 : 0,
-            leading: folder.isNotEmpty && !wide
+            titleSpacing: (folder.isEmpty && !favorites) || wide ? 20 : 0,
+            leading: selecting
+                ? IconButton(
+                    tooltip: '선택 취소',
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => state.update(state._selected.clear),
+                  )
+                : (folder.isNotEmpty || favorites) && !wide
                 ? IconButton(
                     icon: const Icon(Icons.arrow_back_rounded),
-                    onPressed: () => state._openFolder(Note.parentOf(folder)),
+                    onPressed: () => state._openFolder(
+                      favorites ? '' : Note.parentOf(folder),
+                    ),
                   )
                 : null,
-            title: _Breadcrumb(
-              folder: folder,
-              onOpen: state._openFolder,
-              showRootTitle: !wide,
-            ),
-            actions: [
-              IconButton(
-                tooltip: state._grid ? '목록으로 보기' : '카드로 보기',
-                icon: Icon(
-                  state._grid
-                      ? Icons.view_agenda_outlined
-                      : Icons.grid_view_rounded,
-                ),
-                onPressed: () => state.update(() => state._grid = !state._grid),
-              ),
-              if (!wide) ...[
-                IconButton(
-                  tooltip: '오늘의 노트',
-                  icon: const Icon(Icons.today_rounded),
-                  onPressed: () => openDailyNote(context),
-                ),
-                IconButton(
-                  tooltip: '태그',
-                  icon: const Icon(Icons.tag_rounded),
-                  onPressed: () => _showTags(context, app),
-                ),
-              ],
-              const SyncIndicator(),
-              if (!wide)
-                IconButton(
-                  tooltip: '설정',
-                  icon: const Icon(Icons.settings_outlined),
-                  onPressed: () => Navigator.of(context).pushNamed('/settings'),
-                ),
-              const SizedBox(width: 8),
-            ],
+            title: selecting
+                ? Text(
+                    '${state._selected.length}개 선택',
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                : favorites
+                ? Text(
+                    '즐겨찾기',
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                : _Breadcrumb(
+                    folder: folder,
+                    onOpen: state._openFolder,
+                    showRootTitle: !wide,
+                  ),
+            actions: selecting
+                ? [
+                    IconButton(
+                      tooltip: '모두 선택',
+                      icon: const Icon(Icons.select_all_rounded),
+                      onPressed: () => state.update(
+                        () => state._selected.addAll(notes.map((n) => n.path)),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '즐겨찾기',
+                      icon: const Icon(Icons.star_outline_rounded),
+                      onPressed: state._bulkFavorite,
+                    ),
+                    IconButton(
+                      tooltip: '폴더로 이동',
+                      icon: const Icon(Icons.drive_file_move_outline),
+                      onPressed: state._bulkMove,
+                    ),
+                    IconButton(
+                      tooltip: '삭제',
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      onPressed: state._bulkDelete,
+                    ),
+                    const SizedBox(width: 8),
+                  ]
+                : [
+                    PopupMenuButton<SortMode>(
+                      tooltip: '정렬',
+                      icon: const Icon(Icons.sort_rounded),
+                      initialValue: app.sortMode,
+                      onSelected: app.setSortMode,
+                      itemBuilder: (_) => [
+                        for (final m in SortMode.values)
+                          CheckedPopupMenuItem(
+                            value: m,
+                            checked: m == app.sortMode,
+                            child: Text(m.label),
+                          ),
+                      ],
+                    ),
+                    IconButton(
+                      tooltip: state._grid ? '목록으로 보기' : '카드로 보기',
+                      icon: Icon(
+                        state._grid
+                            ? Icons.view_agenda_outlined
+                            : Icons.grid_view_rounded,
+                      ),
+                      onPressed: () =>
+                          state.update(() => state._grid = !state._grid),
+                    ),
+                    if (!wide) ...[
+                      IconButton(
+                        tooltip: '오늘의 노트',
+                        icon: const Icon(Icons.today_rounded),
+                        onPressed: () => openDailyNote(context),
+                      ),
+                      IconButton(
+                        tooltip: '태그',
+                        icon: const Icon(Icons.tag_rounded),
+                        onPressed: () => _showTags(context, app),
+                      ),
+                    ],
+                    const SyncIndicator(),
+                    if (!wide)
+                      PopupMenuButton<String>(
+                        tooltip: '더보기',
+                        onSelected: (v) => switch (v) {
+                          'favorites' => state._showFavorites(),
+                          'trash' => openTrash(context),
+                          _ => Navigator.of(context).pushNamed('/settings'),
+                        },
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(
+                            value: 'favorites',
+                            child: ListTile(
+                              leading: Icon(Icons.star_rounded),
+                              title: Text('즐겨찾기'),
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'trash',
+                            child: ListTile(
+                              leading: const Icon(Icons.delete_outline_rounded),
+                              title: Text('휴지통 (${app.trash.length})'),
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'settings',
+                            child: ListTile(
+                              leading: Icon(Icons.settings_outlined),
+                              title: Text('설정'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    const SizedBox(width: 8),
+                  ],
             bottom: PreferredSize(
               preferredSize: const Size.fromHeight(64),
               child: Padding(
@@ -514,10 +720,12 @@ class _Content extends StatelessWidget {
                 itemBuilder: (context, i) => _FolderCard(
                   folder: folders[i],
                   count: app.countUnder(folders[i]),
+                  color: app.folderColor(folders[i]),
                   onTap: () => state._openFolder(folders[i]),
                   onAction: (a) => switch (a) {
                     'rename' => state._renameFolder(folders[i]),
                     'move' => state._moveFolder(folders[i]),
+                    'color' => state._pickFolderColor(folders[i]),
                     _ => state._deleteFolder(folders[i]),
                   },
                 ),
@@ -539,8 +747,13 @@ class _Content extends StatelessWidget {
                   itemCount: notes.length,
                   itemBuilder: (context, i) => _NoteCard(
                     note: notes[i],
-                    showFolder: searching,
-                    onTap: () => state._open(notes[i]),
+                    showFolder: searching || favorites,
+                    favorite: app.isFavorite(notes[i].path),
+                    selected: state._selected.contains(notes[i].path),
+                    onTap: () => selecting
+                        ? state._toggleSelect(notes[i].path)
+                        : state._open(notes[i]),
+                    onLongPress: () => state._toggleSelect(notes[i].path),
                     onAction: (a) => _noteAction(a, notes[i]),
                   ),
                 ),
@@ -552,8 +765,13 @@ class _Content extends StatelessWidget {
                   itemCount: notes.length,
                   itemBuilder: (context, i) => _NoteRow(
                     note: notes[i],
-                    showFolder: searching,
-                    onTap: () => state._open(notes[i]),
+                    showFolder: searching || favorites,
+                    favorite: app.isFavorite(notes[i].path),
+                    selected: state._selected.contains(notes[i].path),
+                    onTap: () => selecting
+                        ? state._toggleSelect(notes[i].path)
+                        : state._open(notes[i]),
+                    onLongPress: () => state._toggleSelect(notes[i].path),
                     onAction: (a) => _noteAction(a, notes[i]),
                   ),
                 ),
@@ -595,6 +813,8 @@ class _Content extends StatelessWidget {
   }
 
   void _noteAction(String action, Note note) => switch (action) {
+    'favorite' => app.setFavorite([note.path], !app.isFavorite(note.path)),
+    'select' => state._toggleSelect(note.path),
     'rename' => state._renameNote(note),
     'move' => state._moveNote(note),
     _ => state._deleteNote(note),
@@ -717,8 +937,24 @@ class _Sidebar extends StatelessWidget {
                     label: '모든 메모',
                     count: app.notes.length,
                     depth: 0,
-                    selected: state._folder.isEmpty,
+                    selected: state._folder.isEmpty && !state._favorites,
                     onTap: () => state._openFolder(''),
+                  ),
+                  _TreeRow(
+                    icon: Icons.star_rounded,
+                    label: '즐겨찾기',
+                    count: app.favorites.length,
+                    depth: 0,
+                    selected: state._favorites,
+                    onTap: state._showFavorites,
+                  ),
+                  _TreeRow(
+                    icon: Icons.delete_outline_rounded,
+                    label: '휴지통',
+                    count: app.trash.length,
+                    depth: 0,
+                    selected: false,
+                    onTap: () => openTrash(context),
                   ),
                   _TreeRow(
                     icon: Icons.today_rounded,
@@ -780,6 +1016,7 @@ class _Sidebar extends StatelessWidget {
       final open = state._expanded.contains(f);
       rows.add(
         _TreeRow(
+          iconColor: app.folderColor(f),
           icon: open ? Icons.folder_open_rounded : Icons.folder_rounded,
           label: p.posix.basename(f),
           count: app.countUnder(f),
@@ -809,8 +1046,10 @@ class _TreeRow extends StatelessWidget {
     this.expanded,
     this.onToggle,
     this.trailing,
+    this.iconColor,
   });
 
+  final Color? iconColor;
   final IconData icon;
   final String label;
   final int? count;
@@ -858,7 +1097,11 @@ class _TreeRow extends StatelessWidget {
                           ),
                         ),
                 ),
-                Icon(icon, size: 20, color: selected ? scheme.primary : fg),
+                Icon(
+                  icon,
+                  size: 20,
+                  color: iconColor ?? (selected ? scheme.primary : fg),
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -949,11 +1192,38 @@ class _SectionHeader extends StatelessWidget {
 PopupMenuButton<String> _actionsMenu(
   ValueChanged<String> onAction, {
   bool folder = false,
+  bool favorite = false,
 }) => PopupMenuButton<String>(
   icon: const Icon(Icons.more_horiz_rounded, size: 20),
   tooltip: '더보기',
   onSelected: onAction,
   itemBuilder: (context) => [
+    if (!folder) ...[
+      PopupMenuItem(
+        value: 'favorite',
+        child: ListTile(
+          leading: Icon(
+            favorite ? Icons.star_rounded : Icons.star_outline_rounded,
+          ),
+          title: Text(favorite ? '즐겨찾기 해제' : '즐겨찾기'),
+        ),
+      ),
+      const PopupMenuItem(
+        value: 'select',
+        child: ListTile(
+          leading: Icon(Icons.check_circle_outline_rounded),
+          title: Text('선택'),
+        ),
+      ),
+    ],
+    if (folder)
+      const PopupMenuItem(
+        value: 'color',
+        child: ListTile(
+          leading: Icon(Icons.palette_outlined),
+          title: Text('색상'),
+        ),
+      ),
     const PopupMenuItem(
       value: 'rename',
       child: ListTile(
@@ -987,10 +1257,12 @@ class _FolderCard extends StatelessWidget {
     required this.count,
     required this.onTap,
     required this.onAction,
+    this.color,
   });
 
   final String folder;
   final int count;
+  final Color? color;
   final VoidCallback onTap;
   final ValueChanged<String> onAction;
 
@@ -998,7 +1270,9 @@ class _FolderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: scheme.surfaceContainer,
+      color: color == null
+          ? scheme.surfaceContainer
+          : Color.alphaBlend(color!.withValues(alpha: 0.14), scheme.surface),
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
@@ -1006,7 +1280,11 @@ class _FolderCard extends StatelessWidget {
         child: Row(
           children: [
             const SizedBox(width: 14),
-            Icon(Icons.folder_rounded, color: scheme.primary, size: 28),
+            Icon(
+              Icons.folder_rounded,
+              color: color ?? scheme.primary,
+              size: 28,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -1104,12 +1382,18 @@ class _NoteCard extends StatelessWidget {
     required this.showFolder,
     required this.onTap,
     required this.onAction,
+    required this.onLongPress,
+    this.favorite = false,
+    this.selected = false,
   });
 
   final Note note;
   final bool showFolder;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
   final ValueChanged<String> onAction;
+  final bool favorite;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -1119,15 +1403,49 @@ class _NoteCard extends StatelessWidget {
       color: scheme.surfaceContainerLow,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+        side: selected
+            ? BorderSide(color: scheme.primary, width: 2.5)
+            : BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(child: _NotePreview(note: note)),
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _NotePreview(note: note),
+                  if (favorite)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Icon(
+                        Icons.star_rounded,
+                        size: 20,
+                        color: Colors.amber.shade600,
+                      ),
+                    ),
+                  if (selected)
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: CircleAvatar(
+                        radius: 12,
+                        backgroundColor: scheme.primary,
+                        child: Icon(
+                          Icons.check_rounded,
+                          size: 16,
+                          color: scheme.onPrimary,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
             Divider(
               height: 1,
               color: scheme.outlineVariant.withValues(alpha: 0.6),
@@ -1169,7 +1487,7 @@ class _NoteCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  _actionsMenu(onAction),
+                  _actionsMenu(onAction, favorite: favorite),
                 ],
               ),
             ),
@@ -1186,12 +1504,18 @@ class _NoteRow extends StatelessWidget {
     required this.showFolder,
     required this.onTap,
     required this.onAction,
+    required this.onLongPress,
+    this.favorite = false,
+    this.selected = false,
   });
 
   final Note note;
   final bool showFolder;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
   final ValueChanged<String> onAction;
+  final bool favorite;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -1202,6 +1526,9 @@ class _NoteRow extends StatelessWidget {
       if (note.preview.isNotEmpty) note.preview,
     ].join(' · ');
     return ListTile(
+      selected: selected,
+      selectedTileColor: scheme.secondaryContainer,
+      onLongPress: onLongPress,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       leading: ClipRRect(
         borderRadius: BorderRadius.circular(10),
@@ -1220,13 +1547,15 @@ class _NoteRow extends StatelessWidget {
         ),
       ),
       title: Text(
-        note.title,
+        favorite ? '★ ${note.title}' : note.title,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w600),
       ),
       subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-      trailing: _actionsMenu(onAction),
+      trailing: selected
+          ? Icon(Icons.check_circle_rounded, color: scheme.primary)
+          : _actionsMenu(onAction, favorite: favorite),
       onTap: onTap,
     );
   }

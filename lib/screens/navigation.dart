@@ -305,3 +305,148 @@ class _QuickSwitcherState extends State<_QuickSwitcher> {
     );
   }
 }
+
+Future<void> openTrash(BuildContext context) =>
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const TrashScreen()));
+
+/// Deleted notes: restore or delete for good. Items older than 30 days are
+/// removed automatically.
+class TrashScreen extends StatelessWidget {
+  const TrashScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final scheme = Theme.of(context).colorScheme;
+    final items = app.trash.toList()
+      ..sort((a, b) => b.modified.compareTo(a.modified));
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('휴지통'),
+        actions: [
+          if (items.isNotEmpty)
+            TextButton.icon(
+              icon: const Icon(Icons.delete_forever_rounded),
+              label: const Text('비우기'),
+              onPressed: () async {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('휴지통 비우기'),
+                    content: Text('${items.length}개를 영구 삭제합니다. 되돌릴 수 없습니다.'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('취소'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('영구 삭제'),
+                      ),
+                    ],
+                  ),
+                );
+                if (ok == true) {
+                  await app.deleteForever(items.map((n) => n.path));
+                }
+              },
+            ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: items.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.delete_outline_rounded,
+                    size: 56,
+                    color: scheme.outline,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('휴지통이 비어 있습니다'),
+                ],
+              ),
+            )
+          : ListView(
+              padding: const EdgeInsets.all(8),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                  child: Text(
+                    '삭제한 메모는 30일 동안 보관된 뒤 자동으로 삭제됩니다.',
+                    style: TextStyle(color: scheme.outline),
+                  ),
+                ),
+                for (final n in items)
+                  ListTile(
+                    leading: Icon(
+                      n.kind == NoteKind.drawing
+                          ? Icons.draw_outlined
+                          : Icons.description_outlined,
+                    ),
+                    title: Text(n.title),
+                    subtitle: Text(
+                      [
+                        if (Note.parentOf(n.path) != Note.trashFolder)
+                          Note.parentOf(n.path)
+                              .substring(Note.trashFolder.length + 1),
+                        '${30 - DateTime.now().difference(n.modified).inDays}일 후 삭제',
+                      ].join(' · '),
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: '복원',
+                          icon: const Icon(Icons.restore_rounded),
+                          onPressed: () async {
+                            final path = await app.restoreNote(n.path);
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text("'$path'(으)로 복원했습니다")),
+                              );
+                            }
+                          },
+                        ),
+                        IconButton(
+                          tooltip: '영구 삭제',
+                          icon: Icon(
+                            Icons.delete_forever_outlined,
+                            color: scheme.error,
+                          ),
+                          onPressed: () async {
+                            final ok = await showDialog<bool>(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                title: const Text('영구 삭제'),
+                                content: Text(
+                                  "'${n.title}'을(를) 영구 삭제합니다. 되돌릴 수 없습니다.",
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, false),
+                                    child: const Text('취소'),
+                                  ),
+                                  FilledButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, true),
+                                    child: const Text('영구 삭제'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (ok == true) await app.deleteForever([n.path]);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+}

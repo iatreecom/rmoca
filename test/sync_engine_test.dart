@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rmoca/models/note.dart';
+import 'package:rmoca/models/note_meta.dart';
 import 'package:rmoca/services/git_hash.dart';
 import 'package:rmoca/services/local_store.dart';
 import 'package:rmoca/services/remote.dart';
@@ -82,6 +84,7 @@ void main() {
       remote: remote,
       targetKey: 'test',
       deviceName: 'mac',
+      mergers: const {Note.metaPath: NoteMeta.merge},
       clock: () => DateTime(2026, 10, 10, 9, 30),
     );
   });
@@ -224,5 +227,48 @@ void main() {
     await engine.sync();
     expect(remote.files.keys, ['b/a/note.md']);
     expect(await store.listFolders(), ['b', 'b/a']);
+  });
+
+  test('favorites changed on two devices are merged, not conflicted', () async {
+    final t0 = DateTime.utc(2026, 1, 1);
+    final base = NoteMeta()..setFavorite('a.md', true, t0);
+    await store.writeMeta(base);
+    await engine.sync();
+
+    final local = await store.readMeta()
+      ..setFavorite('b.md', true, t0.add(const Duration(minutes: 1)));
+    await store.writeMeta(local);
+    final other = NoteMeta.decode(utf8.encode(remote.text(Note.metaPath)!))
+      ..setFavorite('a.md', false, t0.add(const Duration(minutes: 2)))
+      ..setFolderColor('work', 0xFF0000, t0);
+    remote.put(Note.metaPath, utf8.decode(other.encode()));
+
+    final r = await engine.sync();
+    expect(r.conflicts, isEmpty);
+    final merged = await store.readMeta();
+    expect(merged.isFavorite('a.md'), isFalse);
+    expect(merged.isFavorite('b.md'), isTrue);
+    expect(merged.folderColor('work'), 0xFF0000);
+    expect(remote.text(Note.metaPath), utf8.decode(merged.encode()));
+  });
+
+  test('trash keeps paths, restores and hides trashed notes', () async {
+    await store.writeText('work/a.md', 'x');
+    final trashed = await store.moveToTrash('work/a.md');
+    expect(trashed, '.trash/work/a.md');
+    expect(await store.listNotes(), isEmpty);
+    expect(
+      (await store.listNotes(trash: true)).single.path,
+      '.trash/work/a.md',
+    );
+    expect(await store.listFolders(), isEmpty);
+
+    // Trash syncs like any folder, so other devices see the deletion.
+    await engine.sync();
+    expect(remote.files.keys, ['.trash/work/a.md']);
+
+    expect(await store.restoreFromTrash(trashed), 'work/a.md');
+    expect(await store.readText('work/a.md'), 'x');
+    expect(await store.listNotes(trash: true), isEmpty);
   });
 }

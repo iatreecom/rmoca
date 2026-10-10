@@ -42,8 +42,14 @@ class SyncEngine {
     required this.remote,
     required this.targetKey,
     required this.deviceName,
+    this.mergers = const {},
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
+
+  /// Files that are merged instead of getting a conflict copy when both
+  /// sides changed them: path -> merge(local, remote).
+  final Map<String, Uint8List Function(Uint8List local, Uint8List remote)>
+  mergers;
 
   final LocalStore store;
   final NoteRemote remote;
@@ -128,6 +134,14 @@ class SyncEngine {
         // Edited here, deleted elsewhere: keep the edit.
         changes.add(RemoteChange.put(path, await store.readBytes(path)));
         newBase[path] = l;
+        result.uploaded.add(path);
+      } else if (mergers[path] case final merge?) {
+        final remoteBytes = await remote.download(r);
+        final merged = merge(await store.readBytes(path), remoteBytes);
+        await store.writeBytesUnlocked(path, merged);
+        changes.add(RemoteChange.put(path, merged));
+        newBase[path] = gitBlobSha(merged);
+        result.downloaded.add(path);
         result.uploaded.add(path);
       } else {
         final localBytes = await store.readBytes(path);

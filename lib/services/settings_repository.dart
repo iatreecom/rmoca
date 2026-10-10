@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../app_state.dart' show DrawingMode;
+import '../app_state.dart' show DrawingMode, SortMode;
 import '../models/sync_settings.dart';
 
 /// Keeps sync settings in shared preferences and the token in the OS
@@ -66,6 +66,18 @@ class SettingsRepository {
   Future<void> saveDrawingMode(DrawingMode mode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('drawingMode', mode.name);
+  }
+
+  Future<SortMode> loadSortMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final name = prefs.getString('sortMode');
+    return SortMode.values.where((m) => m.name == name).firstOrNull ??
+        SortMode.modifiedDesc;
+  }
+
+  Future<void> saveSortMode(SortMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('sortMode', mode.name);
   }
 
   static String _defaultDeviceName() {

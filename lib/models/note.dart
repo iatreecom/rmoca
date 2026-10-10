@@ -44,9 +44,21 @@ class Note {
   /// Marker file that keeps an otherwise empty folder in git.
   static const folderMarker = '.gitkeep';
 
-  /// Files the sync engine mirrors: notes plus folder markers.
+  /// Synced settings (favorites, folder colors).
+  static const metaPath = '.rmoca/meta.json';
+
+  /// Deleted notes keep their path under this folder (Obsidian's `.trash`).
+  static const trashFolder = '.trash';
+
+  /// Files the sync engine mirrors: notes, folder markers and settings.
   static bool isSyncedPath(String path) =>
-      isNotePath(path) || p.posix.basename(path) == folderMarker;
+      isNotePath(path) ||
+      p.posix.basename(path) == folderMarker ||
+      path == metaPath;
+
+  /// In a dot-folder (`.trash`, `.rmoca`, `.obsidian`…): not shown as notes.
+  static bool isHidden(String path) =>
+      path.split('/').any((s) => s.startsWith('.') && s != folderMarker);
 
   /// Parent folder of [path], '' for the root.
   static String parentOf(String path) {

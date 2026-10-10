@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/widgets.dart';
+
 import 'package:path/path.dart' as p;
 
 import 'markdown/link_rewriter.dart';
 import 'markdown/note_links.dart';
 import 'models/note.dart';
+import 'models/note_meta.dart';
 import 'models/sync_settings.dart';
 import 'services/github_remote.dart';
 import 'services/local_store.dart';
@@ -15,6 +17,18 @@ import 'services/settings_repository.dart';
 import 'services/sync_engine.dart';
 
 enum SyncStatus { notConfigured, idle, syncing, offline, error }
+
+/// Order of notes in lists (favorites always come first).
+enum SortMode {
+  modifiedDesc('최근 수정 순'),
+  modifiedAsc('오래된 순'),
+  nameAsc('이름 순 (가나다)'),
+  nameDesc('이름 역순');
+
+  const SortMode(this.label);
+
+  final String label;
+}
 
 /// How a new drawing is stored.
 enum DrawingMode {
@@ -41,6 +55,15 @@ class AppState extends ChangeNotifier {
   /// Every folder, including empty ones ('a', 'a/b', ...).
   List<String> folders = [];
   DrawingMode drawingMode = DrawingMode.file;
+  SortMode sortMode = SortMode.modifiedDesc;
+
+  /// Synced favorites and folder colors.
+  NoteMeta meta = NoteMeta();
+
+  /// Deleted notes, with paths inside `.trash`.
+  List<Note> trash = [];
+
+  static const trashRetention = Duration(days: 30);
   SyncStatus status = SyncStatus.notConfigured;
   String? lastError;
   DateTime? lastSync;
@@ -65,6 +88,8 @@ class AppState extends ChangeNotifier {
   Future<void> init() async {
     settings = await _settingsRepo.load();
     drawingMode = await _settingsRepo.loadDrawingMode();
+    sortMode = await _settingsRepo.loadSortMode();
+    await store.purgeTrash(trashRetention);
     lastSync = (await store.loadState())?.lastSync;
     await refreshNotes();
     _updateIdleStatus();
@@ -127,9 +152,71 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> refreshNotes() async {
-    notes = await store.listNotes();
+    meta = await store.readMeta();
+    notes = _sorted(await store.listNotes());
     folders = await store.listFolders();
+    trash = await store.listNotes(trash: true);
     notifyListeners();
+  }
+
+  List<Note> _sorted(List<Note> list) {
+    int byMode(Note a, Note b) => switch (sortMode) {
+      SortMode.modifiedDesc => b.modified.compareTo(a.modified),
+      SortMode.modifiedAsc => a.modified.compareTo(b.modified),
+      SortMode.nameAsc => a.title.toLowerCase().compareTo(
+        b.title.toLowerCase(),
+      ),
+      SortMode.nameDesc => b.title.toLowerCase().compareTo(
+        a.title.toLowerCase(),
+      ),
+    };
+    return list..sort((a, b) {
+      final fa = meta.isFavorite(a.path), fb = meta.isFavorite(b.path);
+      if (fa != fb) return fa ? -1 : 1;
+      return byMode(a, b);
+    });
+  }
+
+  Future<void> setSortMode(SortMode mode) async {
+    sortMode = mode;
+    notes = _sorted(notes);
+    notifyListeners();
+    await _settingsRepo.saveSortMode(mode);
+  }
+
+  // --- favorites and colors --------------------------------------------------
+
+  bool isFavorite(String path) => meta.isFavorite(path);
+
+  List<Note> get favorites =>
+      notes.where((n) => meta.isFavorite(n.path)).toList();
+
+  Future<void> setFavorite(Iterable<String> paths, bool value) async {
+    for (final path in paths) {
+      meta.setFavorite(path, value, DateTime.now());
+    }
+    await _saveMeta();
+  }
+
+  Color? folderColor(String folder) {
+    final c = meta.folderColor(folder);
+    return c == null ? null : Color(0xFF000000 | c);
+  }
+
+  Future<void> setFolderColor(String folder, Color? color) async {
+    meta.setFolderColor(
+      folder,
+      color == null ? null : color.toARGB32() & 0xFFFFFF,
+      DateTime.now(),
+    );
+    await _saveMeta();
+  }
+
+  Future<void> _saveMeta() async {
+    await store.writeMeta(meta);
+    notes = _sorted(notes);
+    notifyListeners();
+    _scheduleSync();
   }
 
   Future<void> setDrawingMode(DrawingMode mode) async {
@@ -154,8 +241,32 @@ class AppState extends ChangeNotifier {
     _scheduleSync();
   }
 
+  /// Moves a note to the trash (restorable for 30 days).
   Future<void> deleteNote(String path) async {
-    await store.delete(path);
+    await store.moveToTrash(path);
+    await refreshNotes();
+    _scheduleSync();
+  }
+
+  Future<void> deleteNotes(Iterable<String> paths) async {
+    for (final path in paths) {
+      await store.moveToTrash(path);
+    }
+    await refreshNotes();
+    _scheduleSync();
+  }
+
+  Future<String> restoreNote(String trashPath) async {
+    final path = await store.restoreFromTrash(trashPath);
+    await refreshNotes();
+    _scheduleSync();
+    return path;
+  }
+
+  Future<void> deleteForever(Iterable<String> trashPaths) async {
+    for (final path in trashPaths) {
+      await store.delete(path);
+    }
     await refreshNotes();
     _scheduleSync();
   }
@@ -177,8 +288,9 @@ class AppState extends ChangeNotifier {
     return path;
   }
 
+  /// Moves a folder with everything in it to the trash.
   Future<void> deleteFolder(String folder) async {
-    await store.deleteFolder(folder);
+    await store.moveToTrash(folder, folder: true);
     await refreshNotes();
     _scheduleSync();
   }
@@ -255,6 +367,16 @@ class AppState extends ChangeNotifier {
   /// Rewrites relative links in every markdown note after [moves]
   /// (old path -> new path) so images and links keep working.
   Future<void> _afterMove(Map<String, String> moves) async {
+    // Favorites and colors follow the files.
+    meta = await store.readMeta();
+    meta.applyMoves(moves, DateTime.now());
+    final folderMoves = {
+      for (final e in moves.entries)
+        if (Note.parentOf(e.key) != Note.parentOf(e.value))
+          Note.parentOf(e.key): Note.parentOf(e.value),
+    }..remove('');
+    meta.applyMoves(folderMoves, DateTime.now());
+    await store.writeMeta(meta);
     final reverse = {for (final e in moves.entries) e.value: e.key};
     for (final note in await store.listNotes()) {
       if (note.kind != NoteKind.markdown) continue;
@@ -328,6 +450,7 @@ class AppState extends ChangeNotifier {
       remote: remote,
       targetKey: settings.targetKey,
       deviceName: settings.deviceName,
+      mergers: const {Note.metaPath: NoteMeta.merge},
     );
     final previousError = lastError;
     try {
