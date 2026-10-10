@@ -5,12 +5,32 @@ import 'package:xml/xml.dart';
 
 import 'stroke.dart';
 
+/// Page background, like note paper.
+enum PaperStyle {
+  plain('무지'),
+  lined('줄'),
+  grid('모눈'),
+  dots('점');
+
+  const PaperStyle(this.label);
+
+  final String label;
+
+  static PaperStyle byName(String? name) =>
+      PaperStyle.values.where((p) => p.name == name).firstOrNull ??
+      PaperStyle.plain;
+
+  /// Spacing of lines/dots in page units.
+  static const double spacing = 36;
+}
+
 /// A drawing page: fixed width, height grows as you draw further down.
 class Drawing {
   Drawing({
     required this.strokes,
     this.width = defaultWidth,
     this.height = defaultHeight,
+    this.paper = PaperStyle.plain,
   });
 
   static const double defaultWidth = 1000;
@@ -19,6 +39,7 @@ class Drawing {
   final List<Stroke> strokes;
   double width;
   double height;
+  PaperStyle paper;
 }
 
 /// Reads and writes drawings as standard SVG.
@@ -62,26 +83,30 @@ class SvgCodec {
         'data-id': ?embedId,
         'data-page-width': _num(d.width),
         'data-page-height': _num(d.height),
+        if (d.paper != PaperStyle.plain) 'data-paper': d.paper.name,
       },
       nest: () {
-        b.element(
-          'rect',
-          attributes: {
-            'x': _num(view.left),
-            'y': _num(view.top),
-            'width': _num(view.width),
-            'height': _num(view.height),
-            'fill': '#ffffff',
-          },
-        );
+        final rect = {
+          'x': _num(view.left),
+          'y': _num(view.top),
+          'width': _num(view.width),
+          'height': _num(view.height),
+        };
+        b.element('rect', attributes: {...rect, 'fill': '#ffffff'});
+        if (d.paper != PaperStyle.plain) {
+          _paperPattern(b, d.paper);
+          b.element('rect', attributes: {...rect, 'fill': 'url(#rmoca-paper)'});
+        }
         for (final s in d.strokes) {
           b.element(
             'path',
             attributes: {
               'd': s.svgPathData(),
               'fill': _hex(s.color),
-              if (s.color.a < 1) 'fill-opacity': s.color.a.toStringAsFixed(3),
+              if (s.inkColor.a < 1)
+                'fill-opacity': s.inkColor.a.toStringAsFixed(3),
               'data-size': _num(s.size),
+              if (s.type != PenType.pen) 'data-tool': s.type.name,
               if (s.simulatePressure) 'data-simulate-pressure': 'true',
               'data-points': s.points
                   .map(
@@ -122,15 +147,20 @@ class SvgCodec {
         points.add(PointVector(v[0]!, v[1]!, v.length > 2 ? v[2] : null));
       }
       if (points.isEmpty) continue;
+      final type = PenType.byName(el.getAttribute('data-tool'));
       var color = _parseHex(el.getAttribute('fill')) ?? const Color(0xFF000000);
       final opacity = double.tryParse(el.getAttribute('fill-opacity') ?? '');
-      if (opacity != null) color = color.withValues(alpha: opacity);
+      if (opacity != null) {
+        // fill-opacity includes the pen type's own opacity.
+        color = color.withValues(alpha: (opacity / type.opacity).clamp(0, 1));
+      }
       strokes.add(
         Stroke(
           points: points,
           color: color,
           size: double.tryParse(el.getAttribute('data-size') ?? '') ?? 4,
           simulatePressure: el.getAttribute('data-simulate-pressure') == 'true',
+          type: type,
         ),
       );
     }
@@ -139,6 +169,60 @@ class SvgCodec {
       width: _attr(root, 'data-page-width', 'width') ?? Drawing.defaultWidth,
       height:
           _attr(root, 'data-page-height', 'height') ?? Drawing.defaultHeight,
+      paper: PaperStyle.byName(root.getAttribute('data-paper')),
+    );
+  }
+
+  /// Note-paper pattern in page coordinates so GitHub shows it too.
+  static void _paperPattern(XmlBuilder b, PaperStyle paper) {
+    const s = PaperStyle.spacing;
+    const ink = '#d5dae5';
+    b.element(
+      'defs',
+      nest: () => b.element(
+        'pattern',
+        attributes: {
+          'id': 'rmoca-paper',
+          'patternUnits': 'userSpaceOnUse',
+          'width': _num(s),
+          'height': _num(s),
+        },
+        nest: () {
+          switch (paper) {
+            case PaperStyle.lined:
+              b.element(
+                'path',
+                attributes: {
+                  'd': 'M0,${_num(s - 0.5)}H${_num(s)}',
+                  'stroke': ink,
+                  'stroke-width': '1',
+                },
+              );
+            case PaperStyle.grid:
+              b.element(
+                'path',
+                attributes: {
+                  'd': 'M${_num(s)},0V${_num(s)}M0,${_num(s)}H${_num(s)}',
+                  'stroke': ink,
+                  'stroke-width': '1',
+                  'fill': 'none',
+                },
+              );
+            case PaperStyle.dots:
+              b.element(
+                'circle',
+                attributes: {
+                  'cx': _num(s / 2),
+                  'cy': _num(s / 2),
+                  'r': '1.8',
+                  'fill': '#c3c9d6',
+                },
+              );
+            case PaperStyle.plain:
+              break;
+          }
+        },
+      ),
     );
   }
 
