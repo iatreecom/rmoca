@@ -787,6 +787,15 @@ class BlockEditorState extends State<BlockEditor> {
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 children: [
+                  // The block menu first: always visible on narrow phones.
+                  _btn(Icons.add_box_outlined, '블록 넣기 (/)', () async {
+                    final t = await showBlockMenu(context);
+                    if (t != null && mounted && _session != null) {
+                      await _insertInSession(t);
+                      _focus.requestFocus();
+                    }
+                  }),
+                  _sep(scheme),
                   _btn(Icons.format_bold_rounded, '굵게', () => wrap('**', '**')),
                   _btn(
                     Icons.format_italic_rounded,
@@ -823,14 +832,6 @@ class BlockEditorState extends State<BlockEditor> {
                     '인용',
                     () => linePrefix('> '),
                   ),
-                  _sep(scheme),
-                  _btn(Icons.add_box_outlined, '블록 넣기 (/)', () async {
-                    final t = await showBlockMenu(context);
-                    if (t != null && mounted && _session != null) {
-                      await _insertInSession(t);
-                      _focus.requestFocus();
-                    }
-                  }),
                 ],
               ),
             ),

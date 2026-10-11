@@ -1303,7 +1303,7 @@ PopupMenuButton<String> _actionsMenu(
   bool favorite = false,
 }) => PopupMenuButton<String>(
   icon: const Icon(Icons.more_horiz_rounded, size: 20),
-  tooltip: '더보기',
+  tooltip: '메뉴',
   onSelected: onAction,
   itemBuilder: (context) => [
     if (!folder) ...[
