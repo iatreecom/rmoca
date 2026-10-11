@@ -1,0 +1,135 @@
+# Unit/widget tests on every push. The app tour on real platforms
+# (Android emulator, iOS simulator, macOS, Windows) runs when started by
+# hand from the Actions tab ("Run workflow"), since macOS minutes are
+# expensive. Screenshots of every screen are uploaded as artifacts.
+name: devices
+
+on:
+  push:
+    paths-ignore: ['**.md']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to run the app tour on'
+        default: 'android ios macos windows'
+
+env:
+  FLUTTER_VERSION: '3.47.7'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      # Includes the git protocol tests against `git http-backend`.
+      - run: flutter test
+
+  android:
+    if: github.event_name == 'workflow_dispatch' && contains(inputs.platforms, 'android')
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        device:
+          - { name: phone, profile: pixel_7 }
+          - { name: tablet, profile: pixel_tablet }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: ${{ matrix.device.profile }}
+          disable-animations: true
+          script: flutter drive --driver=test_driver/integration_test.dart --target=integration_test/app_test.dart --dart-define=SCREENSHOTS=true -d emulator-5554
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-${{ matrix.device.name }}
+          path: screenshots/
+
+  ios:
+    if: github.event_name == 'workflow_dispatch' && contains(inputs.platforms, 'ios')
+    needs: test
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iPhone, iPad]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - name: Boot simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          runtimes = json.load(sys.stdin)['devices']
+          ios = sorted((r for r in runtimes if 'iOS' in r), reverse=True)
+          print(next(d['udid'] for r in ios for d in runtimes[r]
+                     if d['name'].startswith('${{ matrix.device }}')))")
+          xcrun simctl boot "$UDID"
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+      - run: flutter drive --driver=test_driver/integration_test.dart --target=integration_test/app_test.dart --dart-define=SCREENSHOTS=true -d "$UDID"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-${{ matrix.device }}
+          path: screenshots/
+
+  desktop:
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: macos, os: macos-latest }
+          - { platform: windows, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        if: contains(inputs.platforms, matrix.platform)
+      - uses: subosito/flutter-action@v2
+        if: contains(inputs.platforms, matrix.platform)
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - if: contains(inputs.platforms, matrix.platform)
+        run: flutter pub get
+      - if: contains(inputs.platforms, matrix.platform)
+        run: flutter drive --driver=test_driver/integration_test.dart --target=integration_test/app_test.dart --dart-define=SCREENSHOTS=true -d ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        if: always() && contains(inputs.platforms, matrix.platform)
+        with:
+          name: ${{ matrix.platform }}
+          path: screenshots/

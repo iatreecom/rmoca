@@ -515,6 +515,10 @@ class LocalStore {
       .replaceAllMapped(RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m[1]!)
       .replaceAll(RegExp(r'<[^>]+>'), '')
       .replaceAll(RegExp(r'(\*\*|__|~~|==|`)'), '')
+      .replaceAllMapped(
+        RegExp(r'(?<![\w*])[*_]([^*_\s][^*_]*?)[*_](?![\w*])'),
+        (m) => m[1]!,
+      )
       .replaceAll(RegExp(r'%%.*?%%'), '')
       .replaceAll(RegExp(r'\s*\|\s*'), ' · ')
       .replaceAll(RegExp(r'^ · | · $'), '')

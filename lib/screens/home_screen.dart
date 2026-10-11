@@ -1096,17 +1096,20 @@ class _Sidebar extends StatelessWidget {
               ),
             ),
             const Divider(height: 1),
-            ListTile(
-              leading: const Icon(Icons.settings_outlined),
-              title: const Text('설정'),
-              subtitle: Text(
-                app.settings.isConfigured
-                    ? app.settings.displayTarget
-                    : '저장소 연결 안 됨',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+            Material(
+              type: MaterialType.transparency,
+              child: ListTile(
+                leading: const Icon(Icons.settings_outlined),
+                title: const Text('설정'),
+                subtitle: Text(
+                  app.settings.isConfigured
+                      ? app.settings.displayTarget
+                      : '저장소 연결 안 됨',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () => Navigator.of(context).pushNamed('/settings'),
               ),
-              onTap: () => Navigator.of(context).pushNamed('/settings'),
             ),
           ],
         ),
