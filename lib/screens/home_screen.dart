@@ -11,6 +11,7 @@ import '../widgets/media_view.dart';
 import '../widgets/sync_indicator.dart';
 import '../services/search.dart';
 import 'drawing_screen.dart';
+import 'conflict_screen.dart';
 import 'markdown_screen.dart';
 import 'navigation.dart';
 
@@ -785,6 +786,42 @@ class _Content extends StatelessWidget {
               ),
             ),
           ),
+          if (app.conflicts.isNotEmpty && !searching)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: Material(
+                  color: theme.colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(16),
+                  child: ListTile(
+                    leading: Icon(
+                      Icons.call_split_rounded,
+                      color: theme.colorScheme.onErrorContainer,
+                    ),
+                    title: Text(
+                      '다른 기기와 충돌한 메모 ${app.conflicts.length}개',
+                      style: TextStyle(
+                        color: theme.colorScheme.onErrorContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: Text(
+                      '비교해서 남길 내용을 고르세요',
+                      style: TextStyle(
+                        color: theme.colorScheme.onErrorContainer,
+                      ),
+                    ),
+                    trailing: Icon(
+                      Icons.chevron_right_rounded,
+                      color: theme.colorScheme.onErrorContainer,
+                    ),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const ConflictScreen()),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           if (empty)
             SliverFillRemaining(
               hasScrollBody: false,

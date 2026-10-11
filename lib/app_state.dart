@@ -11,6 +11,7 @@ import 'markdown/note_links.dart';
 import 'models/note.dart';
 import 'models/note_meta.dart';
 import 'models/sync_settings.dart';
+import 'services/conflicts.dart';
 import 'services/local_store.dart';
 import 'services/media_cache.dart';
 import 'services/remote.dart';
@@ -330,6 +331,35 @@ class AppState extends ChangeNotifier {
     await refreshNotes();
     _scheduleSync();
   }
+
+  /// Conflict copies left by syncs, with the notes they belong to.
+  List<ConflictPair> get conflicts => findConflicts(notes);
+
+  /// Resolves [c] with this device's version: it replaces the note (the
+  /// replaced text stays in version history) and the copy goes to the trash.
+  Future<void> resolveWithCopy(ConflictPair c) async {
+    final bytes = await store.readBytes(c.copy.path);
+    if (await store.exists(c.original)) {
+      if (Note.isDrawingPath(c.original)) {
+        await store.writeBytes(c.original, bytes);
+      } else {
+        await store.writeText(
+          c.original,
+          await store.readText(c.copy.path),
+          keepVersion: true,
+        );
+      }
+    } else {
+      await store.writeBytes(c.original, bytes);
+    }
+    await store.moveToTrash(c.copy.path);
+    _externalChanges.add({c.original});
+    await refreshNotes();
+    _scheduleSync();
+  }
+
+  /// Resolves [c] with the other device's version: the copy goes to trash.
+  Future<void> resolveWithOriginal(ConflictPair c) => deleteNote(c.copy.path);
 
   Future<void> deleteNotes(Iterable<String> paths) async {
     for (final path in paths) {

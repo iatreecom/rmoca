@@ -5,6 +5,7 @@ import 'package:rmoca/markdown/line_diff.dart';
 import 'package:rmoca/markdown/note_links.dart';
 import 'package:rmoca/models/note.dart';
 import 'package:rmoca/services/local_store.dart';
+import 'package:rmoca/services/conflicts.dart';
 import 'package:rmoca/services/search.dart';
 
 void main() {
@@ -67,5 +68,19 @@ void main() {
     await store.rename('a.md', 'b.md');
     expect(await store.versions('b.md'), hasLength(2));
     expect(await store.versions('a.md'), isEmpty);
+  });
+
+  test('conflict copies are paired with their notes', () {
+    Note n(String path) => Note(path: path, modified: DateTime(2026));
+    final found = findConflicts([
+      n('회의/주간 (충돌 my-iPad 2026-10-11 09.30).md'),
+      n('그림 (충돌 phone 2026-10-11 10.05 2).svg'),
+      n('보통 메모 (참고).md'),
+    ]);
+    expect(found, hasLength(2));
+    expect(found[0].original, '회의/주간.md');
+    expect(found[0].device, 'my-iPad');
+    expect(found[0].when, '2026-10-11 09:30');
+    expect(found[1].original, '그림.svg');
   });
 }
