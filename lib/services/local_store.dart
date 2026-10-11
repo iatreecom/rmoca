@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -108,6 +109,7 @@ class LocalStore {
             p.basenameWithoutExtension(entity.path),
           ),
           embeddedSvg: EmbeddedDrawings.firstSvg(text),
+          body: EmbeddedDrawings.textOnly(text),
           links: NoteLinks.extract(rel, text),
         ),
       );
@@ -296,8 +298,19 @@ class LocalStore {
   Future<Uint8List> readBytes(String path) => fileFor(path).readAsBytes();
 
   /// Saves user edits; waits for any running sync to finish first.
-  Future<void> writeText(String path, String content) =>
-      lock.run(() => writeBytesUnlocked(path, utf8.encode(content)));
+  /// [keepVersion] always keeps the old text in the history (otherwise at
+  /// most every few minutes while typing).
+  Future<void> writeText(
+    String path,
+    String content, {
+    bool keepVersion = false,
+  }) => lock.run(
+    () => writeBytesUnlocked(
+      path,
+      utf8.encode(content),
+      keepVersion: keepVersion,
+    ),
+  );
 
   Future<void> delete(String path) => lock.run(() => deleteUnlocked(path));
 
@@ -309,19 +322,101 @@ class LocalStore {
     await target.parent.create(recursive: true);
     await fileFor(from).rename(target.path);
     await _pruneEmptyDirs(fileFor(from).parent);
+    await _moveHistory(from, to);
   });
 
-  /// Writes without taking [lock]; only for callers already holding it.
   Future<void> writeBytes(String path, List<int> bytes) =>
       lock.run(() => writeBytesUnlocked(path, bytes));
 
-  Future<void> writeBytesUnlocked(String path, List<int> bytes) async {
+  /// Writes without taking [lock]; only for callers already holding it.
+  /// The previous text of a markdown note is kept as a version (always
+  /// when [keepVersion], e.g. when a sync replaces it).
+  Future<void> writeBytesUnlocked(
+    String path,
+    List<int> bytes, {
+    bool keepVersion = false,
+  }) async {
+    await _keepVersion(path, bytes, force: keepVersion);
     final file = fileFor(path);
     await file.parent.create(recursive: true);
     // Write to a temp file and rename so a crash never leaves half a note.
     final tmp = File('${file.path}.tmp');
     await tmp.writeAsBytes(bytes, flush: true);
     await tmp.rename(file.path);
+  }
+
+  // --- version history -------------------------------------------------------
+
+  /// Local snapshots of earlier versions of each note (not synced).
+  Directory get historyDir => Directory(p.join(_root.path, 'history'));
+
+  static const maxVersions = 50;
+  static const versionInterval = Duration(minutes: 5);
+
+  Directory _historyFor(String path) => Directory(
+    p.join(
+      historyDir.path,
+      sha1.convert(utf8.encode(path)).toString().substring(0, 24),
+    ),
+  );
+
+  /// Earlier versions of [path], newest first.
+  Future<List<NoteVersion>> versions(String path) async {
+    final dir = _historyFor(path);
+    if (!await dir.exists()) return const [];
+    final result = <NoteVersion>[];
+    await for (final f in dir.list()) {
+      if (f is! File || !f.path.endsWith('.md')) continue;
+      final ms = int.tryParse(p.basenameWithoutExtension(f.path));
+      if (ms == null) continue;
+      result.add(NoteVersion(DateTime.fromMillisecondsSinceEpoch(ms), f));
+    }
+    return result..sort((a, b) => b.time.compareTo(a.time));
+  }
+
+  Future<void> _keepVersion(
+    String path,
+    List<int> next, {
+    required bool force,
+  }) async {
+    if (!path.toLowerCase().endsWith('.md') || Note.isHidden(path)) return;
+    final file = fileFor(path);
+    if (!await file.exists()) return;
+    final current = await file.readAsBytes();
+    if (current.isEmpty || _same(current, next)) return;
+    final existing = await versions(path);
+    final now = DateTime.now();
+    if (existing.isNotEmpty) {
+      if (!force && now.difference(existing.first.time) < versionInterval) {
+        return;
+      }
+      if (_same(await existing.first.file.readAsBytes(), current)) return;
+    }
+    final dir = _historyFor(path);
+    await dir.create(recursive: true);
+    await File(p.join(dir.path, '${now.millisecondsSinceEpoch}.md'))
+        .writeAsBytes(current, flush: true);
+    for (final old in existing.skip(maxVersions - 1)) {
+      await old.file.delete();
+    }
+  }
+
+  /// Keeps a note's history when it is renamed.
+  Future<void> _moveHistory(String from, String to) async {
+    final src = _historyFor(from);
+    if (!await src.exists()) return;
+    final dst = _historyFor(to);
+    if (await dst.exists()) await dst.delete(recursive: true);
+    await dst.parent.create(recursive: true);
+    await src.rename(dst.path);
+  }
+
+  static bool _same(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   Future<void> deleteUnlocked(String path) async {
@@ -382,20 +477,48 @@ class LocalStore {
     }
   }
 
+  /// A few lines of plain text for list cards: markdown syntax removed,
+  /// code and table rules skipped, a heading repeating the name dropped.
   static String _preview(String text, String title) {
     // Skip YAML frontmatter.
     text = text.replaceFirst(RegExp(r'^---\n[\s\S]*?\n---\n?'), '');
+    final parts = <String>[];
+    var length = 0;
+    var inFence = false;
     for (final line in const LineSplitter().convert(text)) {
-      final trimmed = line
-          .replaceFirst(RegExp(r'^[#>\-*+\s]+(\[[ xX]\]\s*)?'), '')
-          .trim();
-      // A heading that just repeats the file name adds nothing.
-      if (trimmed.isNotEmpty && !(line.startsWith('#') && trimmed == title)) {
-        return trimmed.length > 120 ? '${trimmed.substring(0, 120)}…' : trimmed;
+      if (RegExp(r'^\s*(```|~~~)').hasMatch(line)) {
+        inFence = !inFence;
+        continue;
       }
+      if (inFence || RegExp(r'^\s*\|?\s*:?-{2,}').hasMatch(line)) continue;
+      final plain = plainText(line);
+      if (plain.replaceAll(RegExp(r'[·\s]'), '').isEmpty) continue;
+      // A heading that just repeats the file name adds nothing.
+      if (line.startsWith('#') && plain == title) continue;
+      parts.add(plain);
+      length += plain.length;
+      if (length > 160 || parts.length >= 4) break;
     }
-    return '';
+    final joined = parts.join('\n');
+    return joined.length > 200 ? '${joined.substring(0, 200)}…' : joined;
   }
+
+  /// One markdown line as plain text.
+  static String plainText(String line) => line
+      .replaceFirst(RegExp(r'^\s*(#{1,6}\s+|>\s*(\[![^\]]*\][+-]?\s*)?)'), '')
+      .replaceFirst(RegExp(r'^\s*([-*+]|\d+[.)])\s+(\[[ xX]\]\s*)?'), '')
+      .replaceAll(RegExp(r'!\[\[[^\]]*\]\]|!\[[^\]]*\]\([^)]*\)'), '')
+      .replaceAllMapped(
+        RegExp(r'\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]'),
+        (m) => m[2] ?? m[1]!,
+      )
+      .replaceAllMapped(RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m[1]!)
+      .replaceAll(RegExp(r'<[^>]+>'), '')
+      .replaceAll(RegExp(r'(\*\*|__|~~|==|`)'), '')
+      .replaceAll(RegExp(r'%%.*?%%'), '')
+      .replaceAll(RegExp(r'\s*\|\s*'), ' · ')
+      .replaceAll(RegExp(r'^ · | · $'), '')
+      .trim();
 
   static void _checkPath(String path) {
     final parts = path.split('/');
@@ -406,4 +529,14 @@ class LocalStore {
       throw ArgumentError.value(path, 'path', 'Invalid note path');
     }
   }
+}
+
+/// An earlier version of a note, kept on this device.
+class NoteVersion {
+  NoteVersion(this.time, this.file);
+
+  final DateTime time;
+  final File file;
+
+  Future<String> read() => file.readAsString();
 }

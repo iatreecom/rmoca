@@ -6,18 +6,48 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../models/note.dart';
+import 'calendar_screen.dart';
 import 'drawing_screen.dart';
+import 'graph_screen.dart';
 import 'markdown_screen.dart';
 
-/// Opens the editor for the note at [path].
-Future<void> openNote(BuildContext context, String path, {bool edit = false}) =>
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => Note.isDrawingPath(path)
-            ? DrawingScreen(path: path)
-            : MarkdownScreen(path: path, startEditing: edit),
-      ),
-    );
+/// On tablets, the pane next to the note list that notes open in.
+class NotePane extends InheritedWidget {
+  const NotePane({super.key, required this.open, required super.child});
+
+  final void Function(String path, bool edit) open;
+
+  static NotePane? maybeOf(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<NotePane>();
+
+  @override
+  bool updateShouldNotify(NotePane oldWidget) => false;
+}
+
+/// Opens the editor for the note at [path]: in the side pane when there
+/// is one (text notes), otherwise as a new page.
+Future<void> openNote(BuildContext context, String path, {bool edit = false}) {
+  final pane = NotePane.maybeOf(context);
+  if (pane != null && !Note.isDrawingPath(path)) {
+    pane.open(path, edit);
+    return Future.value();
+  }
+  return Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => Note.isDrawingPath(path)
+          ? DrawingScreen(path: path)
+          : MarkdownScreen(path: path, startEditing: edit),
+    ),
+  );
+}
+
+Future<void> openCalendar(BuildContext context) =>
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const CalendarScreen()));
+
+Future<void> openGraph(BuildContext context) =>
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const GraphScreen()));
 
 /// Shows the notes tagged [tag].
 Future<void> openTag(BuildContext context, String tag) =>
@@ -134,13 +164,17 @@ String applyTemplate(String template, String title, DateTime now) => template
     .replaceAll('{{date}}', DateFormat('yyyy-MM-dd').format(now))
     .replaceAll('{{time}}', DateFormat('HH:mm').format(now));
 
-/// Opens today's note in `Daily/`, creating it from `Templates/Daily.md`
-/// (or a default layout) the first time.
-Future<void> openDailyNote(BuildContext context) async {
+/// Path of the daily note for [day].
+String dailyNotePath(DateTime day) =>
+    '$dailyFolder/${DateFormat('yyyy-MM-dd').format(day)}.md';
+
+/// Opens the daily note in `Daily/` for [day] (today by default), creating
+/// it from `Templates/Daily.md` (or a default layout) the first time.
+Future<void> openDailyNote(BuildContext context, [DateTime? day]) async {
   final app = context.read<AppState>();
-  final now = DateTime.now();
+  final now = day ?? DateTime.now();
   final name = DateFormat('yyyy-MM-dd').format(now);
-  final path = '$dailyFolder/$name.md';
+  final path = dailyNotePath(now);
   if (!await app.store.exists(path)) {
     final tpl = app.resolveWiki('$templatesFolder/Daily', '');
     final body = tpl != null

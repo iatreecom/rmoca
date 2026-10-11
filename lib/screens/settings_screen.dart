@@ -534,6 +534,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       icon: Icons.palette_outlined,
                       title: '화면',
                       children: [
+                        Text(
+                          '메모 글자 크기 ${(app.noteScale * 100).round()}%',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        Slider(
+                          value: app.noteScale,
+                          min: AppState.noteScales.min,
+                          max: AppState.noteScales.max,
+                          divisions: 8,
+                          label: '${(app.noteScale * 100).round()}%',
+                          onChanged: app.setNoteScale,
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('쉬운 편집을 기본으로'),
+                          subtitle: const Text(
+                            '편집할 때 블록 단위 편집(렌더링된 화면)으로 시작합니다. 끄면 마크다운 원문 편집',
+                          ),
+                          value: app.easyEditing,
+                          onChanged: app.setEasyEditing,
+                        ),
                         SegmentedButton<ThemeMode>(
                           segments: const [
                             ButtonSegment(

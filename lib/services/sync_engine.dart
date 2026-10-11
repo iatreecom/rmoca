@@ -179,7 +179,8 @@ class SyncEngine {
     if (gitBlobSha(Uint8List.fromList(bytes)) != sha) {
       throw RemoteException('다운로드한 파일이 손상되었습니다: $path');
     }
-    await store.writeBytesUnlocked(path, bytes);
+    // A change from another device replaces this one: keep the old text.
+    await store.writeBytesUnlocked(path, bytes, keepVersion: true);
   }
 
   Future<String> _conflictPath(String path, Set<String> taken) async {

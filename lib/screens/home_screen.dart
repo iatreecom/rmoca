@@ -9,6 +9,7 @@ import '../markdown/embedded_drawings.dart';
 import '../models/note.dart';
 import '../widgets/media_view.dart';
 import '../widgets/sync_indicator.dart';
+import '../services/search.dart';
 import 'drawing_screen.dart';
 import 'markdown_screen.dart';
 import 'navigation.dart';
@@ -29,6 +30,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Showing favorites instead of a folder.
   bool _favorites = false;
+
+  /// Tablet split view: the note open next to the list.
+  bool _split = true;
+  String? _paneNote;
+  bool _paneEdit = false;
+
+  void _openInPane(String path, bool edit) => setState(() {
+    _paneNote = path;
+    _paneEdit = edit;
+  });
 
   /// Paths selected in multi-select mode.
   final Set<String> _selected = {};
@@ -164,13 +175,22 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _open(Note note) => Navigator.of(context).push(
-    MaterialPageRoute(
-      builder: (_) => note.kind == NoteKind.drawing
-          ? DrawingScreen(path: note.path)
-          : MarkdownScreen(path: note.path),
-    ),
-  );
+  /// Whether the last layout showed the split view.
+  bool _splitActive = false;
+
+  Future<void> _open(Note note, {bool edit = false}) async {
+    if (_splitActive && note.kind == NoteKind.markdown) {
+      _openInPane(note.path, edit);
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => note.kind == NoteKind.drawing
+            ? DrawingScreen(path: note.path)
+            : MarkdownScreen(path: note.path, startEditing: edit),
+      ),
+    );
+  }
 
   // --- creating --------------------------------------------------------------
 
@@ -198,11 +218,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
     );
     if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => MarkdownScreen(path: path, startEditing: true),
-      ),
-    );
+    await _open(Note(path: path, modified: DateTime.now()), edit: true);
   }
 
   Future<void> _newDrawing() async {
@@ -459,30 +475,76 @@ class _HomeScreenState extends State<HomeScreen> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final wide = constraints.maxWidth >= 840;
+            final canSplit = constraints.maxWidth >= 1100;
+            final split = canSplit && _split;
+            _splitActive = split;
+            final listWidth = split
+                ? (constraints.maxWidth * 0.3).clamp(340.0, 440.0)
+                : constraints.maxWidth - (wide ? 280 : 0);
             final content = _Content(
               state: this,
               app: app,
               wide: wide,
-              width: constraints.maxWidth - (wide ? 280 : 0),
+              width: listWidth,
+              canSplit: canSplit,
             );
-            return Scaffold(
-              body: wide
-                  ? Row(
-                      children: [
+            final paneNote =
+                _paneNote != null && app.notes.any((n) => n.path == _paneNote)
+                ? _paneNote
+                : null;
+            Widget body = wide
+                ? Row(
+                    children: [
+                      SizedBox(
+                        width: 280,
+                        child: _Sidebar(state: this, app: app),
+                      ),
+                      const VerticalDivider(width: 1),
+                      if (split) ...[
                         SizedBox(
-                          width: 280,
-                          child: _Sidebar(state: this, app: app),
+                          width: listWidth,
+                          child: Stack(
+                            children: [
+                              content,
+                              Positioned(
+                                right: 16,
+                                bottom: 16,
+                                child: FloatingActionButton(
+                                  tooltip: '새로 만들기',
+                                  onPressed: _showCreateMenu,
+                                  child: const Icon(Icons.add_rounded),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                         const VerticalDivider(width: 1),
+                        Expanded(
+                          child: paneNote == null
+                              ? const _PanePlaceholder()
+                              : MarkdownScreen(
+                                  key: ValueKey(paneNote),
+                                  path: paneNote,
+                                  startEditing: _paneEdit,
+                                  onClose: () =>
+                                      setState(() => _paneNote = null),
+                                ),
+                        ),
+                      ] else
                         Expanded(child: content),
-                      ],
-                    )
-                  : content,
-              floatingActionButton: FloatingActionButton.extended(
-                onPressed: _showCreateMenu,
-                icon: const Icon(Icons.add_rounded),
-                label: const Text('새로 만들기'),
-              ),
+                    ],
+                  )
+                : content;
+            if (split) body = NotePane(open: _openInPane, child: body);
+            return Scaffold(
+              body: body,
+              floatingActionButton: split
+                  ? null
+                  : FloatingActionButton.extended(
+                      onPressed: _showCreateMenu,
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('새로 만들기'),
+                    ),
             );
           },
         ),
@@ -498,12 +560,16 @@ class _Content extends StatelessWidget {
     required this.app,
     required this.wide,
     required this.width,
+    this.canSplit = false,
   });
 
   final _HomeScreenState state;
   final AppState app;
   final bool wide;
   final double width;
+
+  /// Wide enough for the split view (shows its toggle).
+  final bool canSplit;
 
   @override
   Widget build(BuildContext context) {
@@ -519,13 +585,10 @@ class _Content extends StatelessWidget {
     final notes = favorites && !searching
         ? app.favorites
         : searching
-        ? app.notes
-              .where(
-                (n) =>
-                    n.path.toLowerCase().contains(q) ||
-                    n.preview.toLowerCase().contains(q),
-              )
-              .toList()
+        ? [
+            for (final hit in searchNotes(app.notes, q))
+              hit.note.withPreview(hit.snippet),
+          ]
         : app.notesIn(folder);
     final empty = folders.isEmpty && notes.isEmpty;
     final columns = (width / 230).floor().clamp(2, 6);
@@ -613,6 +676,15 @@ class _Content extends StatelessWidget {
                           ),
                       ],
                     ),
+                    if (canSplit)
+                      IconButton(
+                        tooltip: state._split ? '분할 보기 끄기' : '분할 보기',
+                        isSelected: state._split,
+                        icon: const Icon(Icons.vertical_split_outlined),
+                        selectedIcon: const Icon(Icons.vertical_split_rounded),
+                        onPressed: () =>
+                            state.update(() => state._split = !state._split),
+                      ),
                     IconButton(
                       tooltip: state._grid ? '목록으로 보기' : '카드로 보기',
                       icon: Icon(
@@ -642,6 +714,8 @@ class _Content extends StatelessWidget {
                         onSelected: (v) => switch (v) {
                           'favorites' => state._showFavorites(),
                           'trash' => openTrash(context),
+                          'calendar' => openCalendar(context),
+                          'graph' => openGraph(context),
                           _ => Navigator.of(context).pushNamed('/settings'),
                         },
                         itemBuilder: (_) => [
@@ -650,6 +724,20 @@ class _Content extends StatelessWidget {
                             child: ListTile(
                               leading: Icon(Icons.star_rounded),
                               title: Text('즐겨찾기'),
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'calendar',
+                            child: ListTile(
+                              leading: Icon(Icons.calendar_month_rounded),
+                              title: Text('캘린더'),
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'graph',
+                            child: ListTile(
+                              leading: Icon(Icons.hub_outlined),
+                              title: Text('그래프'),
                             ),
                           ),
                           PopupMenuItem(
@@ -676,7 +764,7 @@ class _Content extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 child: SearchBar(
                   controller: state._search,
-                  hintText: '모든 메모 검색',
+                  hintText: '제목·내용·#태그 검색',
                   leading: const Icon(Icons.search_rounded),
                   elevation: const WidgetStatePropertyAll(0),
                   backgroundColor: WidgetStatePropertyAll(
@@ -964,6 +1052,22 @@ class _Sidebar extends StatelessWidget {
                     depth: 0,
                     selected: false,
                     onTap: () => openDailyNote(context),
+                  ),
+                  _TreeRow(
+                    icon: Icons.calendar_month_rounded,
+                    label: '캘린더',
+                    count: null,
+                    depth: 0,
+                    selected: false,
+                    onTap: () => openCalendar(context),
+                  ),
+                  _TreeRow(
+                    icon: Icons.hub_outlined,
+                    label: '그래프',
+                    count: null,
+                    depth: 0,
+                    selected: false,
+                    onTap: () => openGraph(context),
                   ),
                   _TreeRow(
                     icon: Icons.search_rounded,
@@ -1869,6 +1973,38 @@ class _FolderPickerDialog extends StatelessWidget {
           child: const Text('취소'),
         ),
       ],
+    );
+  }
+}
+
+class _PanePlaceholder extends StatelessWidget {
+  const _PanePlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: scheme.surfaceContainerLowest,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.article_outlined,
+              size: 56,
+              color: scheme.outlineVariant,
+            ),
+            const SizedBox(height: 12),
+            Text('메모를 선택하세요', style: TextStyle(color: scheme.outline)),
+            const SizedBox(height: 4),
+            Text(
+              '목록에서 고른 메모가 여기에 열립니다',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: scheme.outline),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

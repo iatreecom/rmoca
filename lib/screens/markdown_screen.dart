@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../app_state.dart';
 import '../markdown/edit_helpers.dart';
@@ -14,6 +16,7 @@ import '../markdown/link_rewriter.dart';
 import '../markdown/note_document.dart';
 import '../markdown/md_table.dart';
 import '../models/note.dart';
+import '../services/export.dart';
 import '../widgets/block_editor.dart';
 import '../widgets/block_menu.dart';
 import '../widgets/markdown_help.dart';
@@ -22,6 +25,8 @@ import '../widgets/table_editor.dart';
 import '../widgets/wiki_suggestions.dart';
 import '../widgets/sync_indicator.dart';
 import 'drawing_screen.dart';
+import 'graph_screen.dart';
+import 'history_screen.dart';
 import 'navigation.dart';
 import '../theme.dart';
 
@@ -32,7 +37,11 @@ class MarkdownScreen extends StatefulWidget {
     required this.path,
     this.startEditing = false,
     this.openDrawingId,
+    this.onClose,
   });
+
+  /// Shown in a side pane instead of its own page: a close button.
+  final VoidCallback? onClose;
 
   final String path;
   final bool startEditing;
@@ -51,6 +60,7 @@ enum _Mode { read, easy, markdown }
 class _MarkdownScreenState extends State<MarkdownScreen> {
   final _text = TextEditingController();
   final _focus = FocusNode();
+  final _screenFocus = FocusNode(debugLabel: 'note screen');
   final _scroll = ScrollController();
   final Map<int, GlobalKey> _headingKeys = {};
   final Map<int, GlobalKey> _blockHeadingKeys = {};
@@ -82,6 +92,7 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     if (_dirty) _save();
     _text.dispose();
     _focus.dispose();
+    _screenFocus.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -628,6 +639,122 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
 
   void _toggleMode() => _setMode(_mode == _Mode.read ? _editMode : _Mode.read);
 
+  // --- menu ------------------------------------------------------------------
+
+  String get _title => p.posix.basenameWithoutExtension(widget.path);
+
+  void _toast(String text) => ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(text)));
+
+  Future<void> _share(String kind) async {
+    await _save();
+    final text = _text.text;
+    try {
+      switch (kind) {
+        case 'text':
+          await SharePlus.instance.share(
+            ShareParams(text: shareableText(text), subject: _title),
+          );
+        case 'md':
+          await SharePlus.instance.share(
+            ShareParams(
+              files: [XFile(_app.store.fileFor(widget.path).path)],
+              subject: _title,
+            ),
+          );
+        case 'html':
+          await SharePlus.instance.share(
+            ShareParams(
+              files: [
+                XFile.fromData(
+                  utf8.encode(noteToHtml(_title, text)),
+                  mimeType: 'text/html',
+                  name: '$_title.html',
+                ),
+              ],
+              fileNameOverrides: ['$_title.html'],
+              subject: _title,
+            ),
+          );
+      }
+    } catch (_) {
+      // Sharing is not available everywhere (e.g. Linux): copy instead.
+      await Clipboard.setData(
+        ClipboardData(text: kind == 'html' ? noteToHtml(_title, text) : text),
+      );
+      _toast(kind == 'html' ? 'HTML을 클립보드에 복사했습니다' : '내용을 클립보드에 복사했습니다');
+    }
+  }
+
+  Future<void> _fontSizeDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => Consumer<AppState>(
+        builder: (context, app, _) => AlertDialog(
+          title: const Text('글자 크기'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '가나다 Aa 123',
+                textScaler: TextScaler.linear(app.noteScale),
+                style: const TextStyle(fontSize: 16),
+              ),
+              Slider(
+                value: app.noteScale,
+                min: AppState.noteScales.min,
+                max: AppState.noteScales.max,
+                divisions: 8,
+                label: '${(app.noteScale * 100).round()}%',
+                onChanged: app.setNoteScale,
+              ),
+              Text(
+                'Ctrl/⌘ + 및 - 로도 바꿀 수 있습니다',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => app.setNoteScale(1),
+              child: const Text('기본값'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('닫기'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _menu(String action) async {
+    switch (action) {
+      case 'history':
+        await _save();
+        if (!mounted) return;
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => HistoryScreen(path: widget.path)),
+        );
+      case 'graph':
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => GraphScreen(focus: widget.path)),
+        );
+      case 'font':
+        await _fontSizeDialog();
+      case 'link':
+        await Clipboard.setData(ClipboardData(text: '[[$_title]]'));
+        _toast('[[$_title]] 링크를 복사했습니다');
+      default:
+        await _share(action);
+    }
+  }
+
+  void _zoom(double delta) =>
+      _app.setNoteScale(delta == 0 ? 1 : _app.noteScale + delta);
+
   Widget _blockEditor() => BlockEditor(
     key: _blockKey,
     source: _text.text,
@@ -663,96 +790,196 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
             _wrap('*', '*'),
         const SingleActivator(LogicalKeyboardKey.keyI, meta: true): () =>
             _wrap('*', '*'),
+        const SingleActivator(LogicalKeyboardKey.equal, control: true): () =>
+            _zoom(0.1),
+        const SingleActivator(LogicalKeyboardKey.equal, meta: true): () =>
+            _zoom(0.1),
+        const SingleActivator(LogicalKeyboardKey.minus, control: true): () =>
+            _zoom(-0.1),
+        const SingleActivator(LogicalKeyboardKey.minus, meta: true): () =>
+            _zoom(-0.1),
+        const SingleActivator(LogicalKeyboardKey.digit0, control: true): () =>
+            _zoom(0),
+        const SingleActivator(LogicalKeyboardKey.digit0, meta: true): () =>
+            _zoom(0),
       },
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 900;
-          Widget body;
-          if (_loading) {
-            body = const Center(child: CircularProgressIndicator());
-          } else if (wide && _editing) {
-            body = Row(
-              children: [
-                Expanded(child: _editor()),
-                const VerticalDivider(width: 1),
-                Expanded(child: _preview()),
-              ],
-            );
-          } else {
-            body = switch (_mode) {
-              _Mode.read => _preview(),
-              _Mode.easy => _blockEditor(),
-              _Mode.markdown => _editor(),
-            };
-          }
-          return Scaffold(
-            appBar: AppBar(
-              titleSpacing: 0,
-              title: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  if (_noteDir.isNotEmpty)
-                    Text(
-                      _noteDir,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
+      // Keeps keyboard shortcuts working while just reading (and takes the
+      // keyboard from the note list when shown next to it).
+      child: Focus(
+        autofocus: true,
+        focusNode: _screenFocus,
+        child: Listener(
+          onPointerDown: (_) {
+            if (!_screenFocus.hasFocus) _screenFocus.requestFocus();
+          },
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 900;
+              Widget body;
+              if (_loading) {
+                body = const Center(child: CircularProgressIndicator());
+              } else if (wide && _editing) {
+                body = Row(
+                  children: [
+                    Expanded(child: _editor()),
+                    const VerticalDivider(width: 1),
+                    Expanded(child: _preview()),
+                  ],
+                );
+              } else {
+                body = switch (_mode) {
+                  _Mode.read => _preview(),
+                  _Mode.easy => _blockEditor(),
+                  _Mode.markdown => _editor(),
+                };
+              }
+              return Scaffold(
+                appBar: AppBar(
+                  titleSpacing: widget.onClose == null ? 0 : 4,
+                  automaticallyImplyLeading: widget.onClose == null,
+                  leading: widget.onClose == null
+                      ? null
+                      : IconButton(
+                          tooltip: '닫기',
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: widget.onClose,
+                        ),
+                  title: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
-                    ),
-                ],
-              ),
-              actions: [
-                IconButton(
-                  tooltip: '목차',
-                  icon: const Icon(Icons.toc_rounded),
-                  onPressed: _showOutline,
-                ),
-                if (_mode != _Mode.read)
-                  IconButton(
-                    tooltip: '마크다운 문법',
-                    icon: const Icon(Icons.help_outline_rounded),
-                    onPressed: _showHelp,
-                  ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: SegmentedButton<_Mode>(
-                    showSelectedIcon: false,
-                    style: const ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    segments: const [
-                      ButtonSegment(
-                        value: _Mode.read,
-                        icon: Icon(Icons.chrome_reader_mode_outlined, size: 18),
-                        tooltip: '읽기 (Ctrl+E)',
-                      ),
-                      ButtonSegment(
-                        value: _Mode.easy,
-                        icon: Icon(Icons.view_agenda_outlined, size: 18),
-                        tooltip: '쉬운 편집 (블록)',
-                      ),
-                      ButtonSegment(
-                        value: _Mode.markdown,
-                        icon: Icon(Icons.code_rounded, size: 18),
-                        tooltip: '마크다운 편집',
-                      ),
+                      if (_noteDir.isNotEmpty)
+                        Text(
+                          _noteDir,
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: Theme.of(context).colorScheme.outline,
+                              ),
+                        ),
                     ],
-                    selected: {_mode},
-                    onSelectionChanged: (s) => _setMode(s.first),
+                  ),
+                  actions: [
+                    IconButton(
+                      tooltip: '목차',
+                      icon: const Icon(Icons.toc_rounded),
+                      onPressed: _showOutline,
+                    ),
+                    if (_mode != _Mode.read)
+                      IconButton(
+                        tooltip: '마크다운 문법',
+                        icon: const Icon(Icons.help_outline_rounded),
+                        onPressed: _showHelp,
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: SegmentedButton<_Mode>(
+                        showSelectedIcon: false,
+                        style: const ButtonStyle(
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        segments: const [
+                          ButtonSegment(
+                            value: _Mode.read,
+                            icon: Icon(
+                              Icons.chrome_reader_mode_outlined,
+                              size: 18,
+                            ),
+                            tooltip: '읽기 (Ctrl+E)',
+                          ),
+                          ButtonSegment(
+                            value: _Mode.easy,
+                            icon: Icon(Icons.view_agenda_outlined, size: 18),
+                            tooltip: '쉬운 편집 (블록)',
+                          ),
+                          ButtonSegment(
+                            value: _Mode.markdown,
+                            icon: Icon(Icons.code_rounded, size: 18),
+                            tooltip: '마크다운 편집',
+                          ),
+                        ],
+                        selected: {_mode},
+                        onSelectionChanged: (s) => _setMode(s.first),
+                      ),
+                    ),
+                    const SyncIndicator(),
+                    PopupMenuButton<String>(
+                      tooltip: '더 보기',
+                      onSelected: _menu,
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(
+                          value: 'history',
+                          child: ListTile(
+                            leading: Icon(Icons.history_rounded),
+                            title: Text('버전 기록'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'graph',
+                          child: ListTile(
+                            leading: Icon(Icons.hub_outlined),
+                            title: Text('연결 그래프'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'font',
+                          child: ListTile(
+                            leading: Icon(Icons.format_size_rounded),
+                            title: Text('글자 크기'),
+                          ),
+                        ),
+                        PopupMenuDivider(),
+                        PopupMenuItem(
+                          value: 'link',
+                          child: ListTile(
+                            leading: Icon(Icons.link_rounded),
+                            title: Text('링크 복사 [[ ]]'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'text',
+                          child: ListTile(
+                            leading: Icon(Icons.share_outlined),
+                            title: Text('텍스트로 공유'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'md',
+                          child: ListTile(
+                            leading: Icon(Icons.description_outlined),
+                            title: Text('파일(.md)로 공유'),
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'html',
+                          child: ListTile(
+                            leading: Icon(Icons.html_rounded),
+                            title: Text('웹 페이지(HTML)로 내보내기'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                body: SafeArea(
+                  top: false,
+                  child: MediaQuery(
+                    data: MediaQuery.of(context).copyWith(
+                      textScaler: TextScaler.linear(
+                        context.select<AppState, double>((a) => a.noteScale),
+                      ),
+                    ),
+                    child: body,
                   ),
                 ),
-                const SyncIndicator(),
-                const SizedBox(width: 4),
-              ],
-            ),
-            body: SafeArea(top: false, child: body),
-          );
-        },
+              );
+            },
+          ),
+        ),
       ),
     );
   }

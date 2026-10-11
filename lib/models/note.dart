@@ -11,8 +11,19 @@ class Note {
     required this.modified,
     this.preview = '',
     this.embeddedSvg,
+    this.body = '',
     NoteLinks? links,
   }) : links = links ?? NoteLinks.empty;
+
+  /// The same note showing [preview] instead (e.g. a search snippet).
+  Note withPreview(String preview) => Note(
+    path: path,
+    modified: modified,
+    preview: preview,
+    embeddedSvg: embeddedSvg,
+    body: body,
+    links: links,
+  );
 
   /// Path relative to the notes root, always using `/` separators.
   final String path;
@@ -23,6 +34,9 @@ class Note {
 
   /// First drawing embedded in a markdown note, used as its thumbnail.
   final String? embeddedSvg;
+
+  /// Text of a markdown note without embedded drawings (for search).
+  final String body;
 
   /// Tags and outgoing links (markdown notes only).
   final NoteLinks links;

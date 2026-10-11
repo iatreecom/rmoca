@@ -36,12 +36,31 @@ void main() {
 
   /// Lets real file I/O complete and the UI catch up.
   Future<void> settle(WidgetTester tester) async {
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < 15; i++) {
       await tester.runAsync(
-        () => Future.delayed(const Duration(milliseconds: 50)),
+        () => Future.delayed(const Duration(milliseconds: 20)),
       );
       await tester.pump();
     }
+  }
+
+  /// Reads [path] once it satisfies [done] (saves run through several
+  /// file operations, each needing a real event-loop turn).
+  Future<String> savedText(
+    WidgetTester tester,
+    String path,
+    bool Function(String) done,
+  ) async {
+    var text = '';
+    for (var i = 0; i < 100; i++) {
+      await tester.runAsync(
+        () => Future.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+      text = (await tester.runAsync(() => app.store.readText(path)))!;
+      if (done(text)) break;
+    }
+    return text;
   }
 
   Widget wrap(Widget child) => ChangeNotifierProvider.value(
@@ -214,8 +233,11 @@ void main() {}
     await tester.tap(find.byKey(const ValueKey('task-checkbox')));
     await tester.pump();
     await tester.pumpWidget(wrap(const SizedBox()));
-    await settle(tester);
-    final saved = await tester.runAsync(() => app.store.readText('rich.md'));
+    final saved = await savedText(
+      tester,
+      'rich.md',
+      (t) => t.contains('- [x]'),
+    );
     expect(saved, contains('- [x] task one'));
   });
 
@@ -258,9 +280,7 @@ void main() {}
     addTearDown(tester.view.reset);
     const source = '# 제목\n\n첫 문단\n\n- [ ] 할 일\n';
     await tester.runAsync(() => app.store.writeText('e.md', source));
-    await tester.pumpWidget(
-      wrap(const MarkdownScreen(path: 'e.md')),
-    );
+    await tester.pumpWidget(wrap(const MarkdownScreen(path: 'e.md')));
     await settle(tester);
     await tester.tap(find.byIcon(Icons.view_agenda_outlined));
     await tester.pump();
@@ -282,8 +302,7 @@ void main() {}
 
     // Leaving the screen saves.
     await tester.pumpWidget(wrap(const SizedBox()));
-    await settle(tester);
-    final saved = await tester.runAsync(() => app.store.readText('e.md'));
+    final saved = await savedText(tester, 'e.md', (t) => t.contains('바뀐'));
     expect(saved, '# 제목\n\n**바뀐** 문단\n\n- [ ] 할 일\n');
   });
 

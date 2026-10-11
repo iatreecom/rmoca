@@ -138,9 +138,11 @@ class NoteView extends StatelessWidget {
       },
       onTapLink: (text, href, title) => _tapLink(context, href),
       checkboxBuilder: (checked) {
-        final line = checkLines != null && checkIndex < checkLines.length
-            ? checkLines[checkIndex++]
-            : null;
+        // MarkdownBody can re-run its builders on its own (e.g. when the
+        // text scale changes); every run visits all checkboxes in order.
+        final line = checkLines == null || checkLines.isEmpty
+            ? null
+            : checkLines[checkIndex++ % checkLines.length];
         return _TaskBox(
           key: const ValueKey('task-checkbox'),
           checked: checked,

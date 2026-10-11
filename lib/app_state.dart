@@ -60,6 +60,9 @@ class AppState extends ChangeNotifier {
 
   /// Edit notes block by block (true) or as plain markdown.
   bool easyEditing = true;
+
+  /// Text size of notes (reading and editing), 1.0 = default.
+  double noteScale = 1.0;
   SortMode sortMode = SortMode.modifiedDesc;
   ThemeMode themeMode = ThemeMode.system;
   Color accent = accentColors.first;
@@ -111,6 +114,7 @@ class AppState extends ChangeNotifier {
     settings = await _settingsRepo.load();
     drawingMode = await _settingsRepo.loadDrawingMode();
     easyEditing = await _settingsRepo.loadEasyEditing();
+    noteScale = await _settingsRepo.loadNoteScale();
     sortMode = await _settingsRepo.loadSortMode();
     final (mode, color) = await _settingsRepo.loadAppearance(accent);
     themeMode = mode;
@@ -273,6 +277,18 @@ class AppState extends ChangeNotifier {
 
   // --- note operations -----------------------------------------------------
 
+  static const noteScales = (min: 0.8, max: 1.6);
+
+  Future<void> setNoteScale(double value) async {
+    final v = double.parse(
+      value.clamp(noteScales.min, noteScales.max).toStringAsFixed(2),
+    );
+    if (v == noteScale) return;
+    noteScale = v;
+    notifyListeners();
+    await _settingsRepo.saveNoteScale(v);
+  }
+
   Future<void> setEasyEditing(bool value) async {
     if (easyEditing == value) return;
     easyEditing = value;
@@ -292,6 +308,14 @@ class AppState extends ChangeNotifier {
     await refreshNotes();
     _scheduleSync();
     return path;
+  }
+
+  /// Puts an earlier version back; the text it replaces stays in history.
+  Future<void> restoreVersion(String path, String content) async {
+    await store.writeText(path, content, keepVersion: true);
+    _externalChanges.add({path});
+    await refreshNotes();
+    _scheduleSync();
   }
 
   Future<void> saveText(String path, String content) async {
@@ -380,6 +404,21 @@ class AppState extends ChangeNotifier {
   }
 
   /// Notes that link to [path] with a wikilink or a relative link.
+  /// Outgoing links of every note to other existing notes.
+  Map<String, Set<String>> get linkGraph {
+    final existing = {for (final n in notes) n.path};
+    return {
+      for (final n in notes)
+        n.path: {
+          ...n.links.paths.where(existing.contains),
+          for (final t in n.links.wikiTargets)
+            if (resolveWiki(t, n.path) case final String r
+                when existing.contains(r))
+              r,
+        }..remove(n.path),
+    };
+  }
+
   List<Note> backlinksTo(String path) => notes
       .where(
         (n) =>

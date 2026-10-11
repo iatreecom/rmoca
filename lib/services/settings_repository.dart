@@ -103,6 +103,16 @@ class SettingsRepository {
     await prefs.setInt('accent', accent.toARGB32());
   }
 
+  Future<double> loadNoteScale() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble('noteScale') ?? 1.0;
+  }
+
+  Future<void> saveNoteScale(double value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('noteScale', value);
+  }
+
   Future<bool> loadEasyEditing() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool('easyEditing') ?? true;
