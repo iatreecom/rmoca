@@ -13,6 +13,7 @@ import 'models/note_meta.dart';
 import 'models/sync_settings.dart';
 import 'services/conflicts.dart';
 import 'services/local_store.dart';
+import 'services/note_crypto.dart';
 import 'services/media_cache.dart';
 import 'services/remote.dart';
 import 'services/remote_factory.dart';
@@ -331,6 +332,9 @@ class AppState extends ChangeNotifier {
     await refreshNotes();
     _scheduleSync();
   }
+
+  /// Keys of locked notes unlocked in this session (memory only).
+  final Map<String, NoteKey> unlockedKeys = {};
 
   /// Conflict copies left by syncs, with the notes they belong to.
   List<ConflictPair> get conflicts => findConflicts(notes);

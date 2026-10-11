@@ -17,6 +17,7 @@ import '../markdown/note_document.dart';
 import '../markdown/md_table.dart';
 import '../models/note.dart';
 import '../services/export.dart';
+import '../services/note_crypto.dart';
 import '../widgets/block_editor.dart';
 import '../widgets/block_menu.dart';
 import '../widgets/markdown_help.dart';
@@ -99,12 +100,40 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
 
   // --- load / save -----------------------------------------------------------
 
+  /// Key of this note while it is unlocked (password-locked notes).
+  NoteKey? _key;
+
+  /// The locked file, while waiting for the password.
+  String? _lockedFile;
+
   Future<void> _load() async {
     final store = _app.store;
-    final content = await store.exists(widget.path)
+    var content = await store.exists(widget.path)
         ? await store.readText(widget.path)
         : '';
     if (!mounted) return;
+    if (NoteCrypto.isLocked(content)) {
+      final known = _app.unlockedKeys[widget.path];
+      final plain = known == null
+          ? null
+          : await NoteCrypto.unlockWithKey(content, known);
+      if (!mounted) return;
+      if (plain == null) {
+        setState(() {
+          _lockedFile = content;
+          _key = null;
+          _loading = false;
+          _mode = _Mode.read;
+        });
+        return;
+      }
+      _key = known;
+      _lockedFile = null;
+      content = plain;
+    } else {
+      _key = null;
+      _lockedFile = null;
+    }
     _text.removeListener(_onChanged);
     final selection = _text.selection;
     _text.text = content;
@@ -159,9 +188,68 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
   _Mode get _editMode => _app.easyEditing ? _Mode.easy : _Mode.markdown;
 
   Future<void> _save() async {
-    if (!_dirty) return;
+    if (!_dirty || _lockedFile != null) return;
     _dirty = false;
-    await _app.saveText(widget.path, _text.text);
+    // Read everything before awaiting: dispose() may save on the way out.
+    final text = _text.text;
+    final key = _key;
+    await _app.saveText(
+      widget.path,
+      key == null ? text : await NoteCrypto.lock(text, key),
+    );
+  }
+
+  // --- locking ---------------------------------------------------------------
+
+  Future<String?> _askPassword({required bool create}) => showDialog<String>(
+    context: context,
+    builder: (_) => _PasswordDialog(create: create),
+  );
+
+  Future<void> _lockNote() async {
+    final password = await _askPassword(create: true);
+    if (password == null || !mounted) return;
+    final key = await NoteCrypto.newKey(password);
+    _key = key;
+    _app.unlockedKeys[widget.path] = key;
+    _dirty = true;
+    await _save();
+    _toast('메모를 잠갔습니다. 암호를 잊으면 열 수 없습니다');
+    setState(() {});
+  }
+
+  Future<void> _removeLock() async {
+    _key = null;
+    _app.unlockedKeys.remove(widget.path);
+    _dirty = true;
+    await _save();
+    _toast('잠금을 풀었습니다');
+    setState(() {});
+  }
+
+  /// Hides the text again until the password is entered.
+  Future<void> _relock() async {
+    await _save();
+    _app.unlockedKeys.remove(widget.path);
+    _text.removeListener(_onChanged);
+    _text.text = '';
+    _lastText = '';
+    _text.addListener(_onChanged);
+    await _load();
+  }
+
+  Future<void> _unlock(String password) async {
+    final (plain, key) = await NoteCrypto.unlock(_lockedFile!, password);
+    if (!mounted) return;
+    _app.unlockedKeys[widget.path] = key;
+    _text.removeListener(_onChanged);
+    _text.text = plain;
+    _lastText = plain;
+    _text.addListener(_onChanged);
+    setState(() {
+      _key = key;
+      _lockedFile = null;
+    });
   }
 
   // --- editing helpers -------------------------------------------------------
@@ -744,6 +832,12 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
         );
       case 'font':
         await _fontSizeDialog();
+      case 'lock':
+        await _lockNote();
+      case 'unlock':
+        await _removeLock();
+      case 'relock':
+        await _relock();
       case 'link':
         await Clipboard.setData(ClipboardData(text: '[[$_title]]'));
         _toast('[[$_title]] 링크를 복사했습니다');
@@ -818,6 +912,8 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
               Widget body;
               if (_loading) {
                 body = const Center(child: CircularProgressIndicator());
+              } else if (_lockedFile != null) {
+                body = _UnlockView(onUnlock: _unlock);
               } else if (wide && _editing) {
                 body = Row(
                   children: [
@@ -864,103 +960,131 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
                     ],
                   ),
                   actions: [
-                    IconButton(
-                      tooltip: '목차',
-                      icon: const Icon(Icons.toc_rounded),
-                      onPressed: _showOutline,
-                    ),
+                    if (_lockedFile == null)
+                      IconButton(
+                        tooltip: '목차',
+                        icon: const Icon(Icons.toc_rounded),
+                        onPressed: _showOutline,
+                      ),
                     if (_mode != _Mode.read)
                       IconButton(
                         tooltip: '마크다운 문법',
                         icon: const Icon(Icons.help_outline_rounded),
                         onPressed: _showHelp,
                       ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: SegmentedButton<_Mode>(
-                        showSelectedIcon: false,
-                        style: const ButtonStyle(
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        segments: const [
-                          ButtonSegment(
-                            value: _Mode.read,
-                            icon: Icon(
-                              Icons.chrome_reader_mode_outlined,
-                              size: 18,
+                    if (_lockedFile == null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: SegmentedButton<_Mode>(
+                          showSelectedIcon: false,
+                          style: const ButtonStyle(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          segments: const [
+                            ButtonSegment(
+                              value: _Mode.read,
+                              icon: Icon(
+                                Icons.chrome_reader_mode_outlined,
+                                size: 18,
+                              ),
+                              tooltip: '읽기 (Ctrl+E)',
                             ),
-                            tooltip: '읽기 (Ctrl+E)',
-                          ),
-                          ButtonSegment(
-                            value: _Mode.easy,
-                            icon: Icon(Icons.view_agenda_outlined, size: 18),
-                            tooltip: '쉬운 편집 (블록)',
-                          ),
-                          ButtonSegment(
-                            value: _Mode.markdown,
-                            icon: Icon(Icons.code_rounded, size: 18),
-                            tooltip: '마크다운 편집',
-                          ),
-                        ],
-                        selected: {_mode},
-                        onSelectionChanged: (s) => _setMode(s.first),
+                            ButtonSegment(
+                              value: _Mode.easy,
+                              icon: Icon(Icons.view_agenda_outlined, size: 18),
+                              tooltip: '쉬운 편집 (블록)',
+                            ),
+                            ButtonSegment(
+                              value: _Mode.markdown,
+                              icon: Icon(Icons.code_rounded, size: 18),
+                              tooltip: '마크다운 편집',
+                            ),
+                          ],
+                          selected: {_mode},
+                          onSelectionChanged: (s) => _setMode(s.first),
+                        ),
                       ),
-                    ),
                     const SyncIndicator(),
                     PopupMenuButton<String>(
                       tooltip: '더 보기',
                       onSelected: _menu,
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(
-                          value: 'history',
-                          child: ListTile(
-                            leading: Icon(Icons.history_rounded),
-                            title: Text('버전 기록'),
+                      itemBuilder: (context) => [
+                        if (_lockedFile == null && _key == null)
+                          const PopupMenuItem(
+                            value: 'lock',
+                            child: ListTile(
+                              leading: Icon(Icons.lock_outline_rounded),
+                              title: Text('암호로 잠그기'),
+                            ),
                           ),
-                        ),
-                        PopupMenuItem(
-                          value: 'graph',
-                          child: ListTile(
-                            leading: Icon(Icons.hub_outlined),
-                            title: Text('연결 그래프'),
+                        if (_key != null) ...const [
+                          PopupMenuItem(
+                            value: 'relock',
+                            child: ListTile(
+                              leading: Icon(Icons.lock_rounded),
+                              title: Text('지금 잠그기'),
+                            ),
                           ),
-                        ),
-                        PopupMenuItem(
-                          value: 'font',
-                          child: ListTile(
-                            leading: Icon(Icons.format_size_rounded),
-                            title: Text('글자 크기'),
+                          PopupMenuItem(
+                            value: 'unlock',
+                            child: ListTile(
+                              leading: Icon(Icons.lock_open_rounded),
+                              title: Text('잠금 해제 (암호 제거)'),
+                            ),
                           ),
-                        ),
-                        PopupMenuDivider(),
-                        PopupMenuItem(
-                          value: 'link',
-                          child: ListTile(
-                            leading: Icon(Icons.link_rounded),
-                            title: Text('링크 복사 [[ ]]'),
+                        ],
+                        ...const [
+                          PopupMenuItem(
+                            value: 'history',
+                            child: ListTile(
+                              leading: Icon(Icons.history_rounded),
+                              title: Text('버전 기록'),
+                            ),
                           ),
-                        ),
-                        PopupMenuItem(
-                          value: 'text',
-                          child: ListTile(
-                            leading: Icon(Icons.share_outlined),
-                            title: Text('텍스트로 공유'),
+                          PopupMenuItem(
+                            value: 'graph',
+                            child: ListTile(
+                              leading: Icon(Icons.hub_outlined),
+                              title: Text('연결 그래프'),
+                            ),
                           ),
-                        ),
-                        PopupMenuItem(
-                          value: 'md',
-                          child: ListTile(
-                            leading: Icon(Icons.description_outlined),
-                            title: Text('파일(.md)로 공유'),
+                          PopupMenuItem(
+                            value: 'font',
+                            child: ListTile(
+                              leading: Icon(Icons.format_size_rounded),
+                              title: Text('글자 크기'),
+                            ),
                           ),
-                        ),
-                        PopupMenuItem(
-                          value: 'html',
-                          child: ListTile(
-                            leading: Icon(Icons.html_rounded),
-                            title: Text('웹 페이지(HTML)로 내보내기'),
+                          PopupMenuDivider(),
+                          PopupMenuItem(
+                            value: 'link',
+                            child: ListTile(
+                              leading: Icon(Icons.link_rounded),
+                              title: Text('링크 복사 [[ ]]'),
+                            ),
                           ),
-                        ),
+                          PopupMenuItem(
+                            value: 'text',
+                            child: ListTile(
+                              leading: Icon(Icons.share_outlined),
+                              title: Text('텍스트로 공유'),
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'md',
+                            child: ListTile(
+                              leading: Icon(Icons.description_outlined),
+                              title: Text('파일(.md)로 공유'),
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'html',
+                            child: ListTile(
+                              leading: Icon(Icons.html_rounded),
+                              title: Text('웹 페이지(HTML)로 내보내기'),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -1103,4 +1227,175 @@ class _Backlinks extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Asks for the password of a locked note.
+class _UnlockView extends StatefulWidget {
+  const _UnlockView({required this.onUnlock});
+
+  final Future<void> Function(String password) onUnlock;
+
+  @override
+  State<_UnlockView> createState() => _UnlockViewState();
+}
+
+class _UnlockViewState extends State<_UnlockView> {
+  final _password = TextEditingController();
+  final _focus = FocusNode();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_password.text.isEmpty || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.onUnlock(_password.text);
+    } on WrongPasswordException catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+        // Ready for another try.
+        _password.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _password.text.length,
+        );
+        _focus.requestFocus();
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.lock_rounded, size: 56, color: scheme.primary),
+              const SizedBox(height: 12),
+              Text(
+                '잠긴 메모',
+                style: Theme.of(context).textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              Text('암호를 입력하면 열립니다', style: TextStyle(color: scheme.outline)),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _password,
+                focusNode: _focus,
+                obscureText: true,
+                autofocus: true,
+                readOnly: _busy,
+                decoration: InputDecoration(
+                  labelText: '암호',
+                  errorText: _error,
+                  prefixIcon: const Icon(Icons.key_rounded),
+                ),
+                onSubmitted: (_) => _submit(),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _busy ? null : _submit,
+                  icon: _busy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.lock_open_rounded),
+                  label: const Text('열기'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// New password (twice) for locking a note.
+class _PasswordDialog extends StatefulWidget {
+  const _PasswordDialog({required this.create});
+
+  final bool create;
+
+  @override
+  State<_PasswordDialog> createState() => _PasswordDialogState();
+}
+
+class _PasswordDialogState extends State<_PasswordDialog> {
+  final _a = TextEditingController();
+  final _b = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _a.dispose();
+    _b.dispose();
+    super.dispose();
+  }
+
+  void _ok() {
+    if (_a.text.length < 4) {
+      setState(() => _error = '4자 이상 입력하세요');
+    } else if (_a.text != _b.text) {
+      setState(() => _error = '두 암호가 다릅니다');
+    } else {
+      Navigator.pop(context, _a.text);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('암호로 잠그기'),
+    content: SizedBox(
+      width: 360,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('메모 내용이 암호화되어 저장·동기화됩니다. 암호를 잊으면 아무도 열 수 없습니다.'),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _a,
+            obscureText: true,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: '암호'),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _b,
+            obscureText: true,
+            decoration: InputDecoration(labelText: '암호 확인', errorText: _error),
+            onSubmitted: (_) => _ok(),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('취소'),
+      ),
+      FilledButton(onPressed: _ok, child: const Text('잠그기')),
+    ],
+  );
 }
