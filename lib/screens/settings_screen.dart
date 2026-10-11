@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../models/sync_settings.dart';
-import '../services/github_remote.dart';
+import '../services/remote_factory.dart';
 
 /// Configures the git repository and folder notes are synced with.
 class SettingsScreen extends StatefulWidget {
@@ -21,7 +21,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _token;
   late final TextEditingController _api;
   late final TextEditingController _device;
+  late final TextEditingController _gitUrl;
+  late final TextEditingController _username;
+  late final TextEditingController _authorName;
+  late final TextEditingController _authorEmail;
   late bool _autoSync;
+  late RemoteKind _kind;
+  late bool _allowSelfSigned;
   bool _showToken = false;
   bool _testing = false;
   String? _testResult;
@@ -39,12 +45,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _token = TextEditingController(text: s.token);
     _api = TextEditingController(text: s.apiBaseUrl);
     _device = TextEditingController(text: s.deviceName);
+    _gitUrl = TextEditingController(text: s.gitUrl);
+    _username = TextEditingController(text: s.username);
+    _authorName = TextEditingController(text: s.authorName);
+    _authorEmail = TextEditingController(text: s.authorEmail);
     _autoSync = s.autoSync;
+    _kind = s.kind;
+    _allowSelfSigned = s.allowSelfSigned;
+    _preset = _guessPreset(s.gitUrl);
   }
 
   @override
   void dispose() {
-    for (final c in [_repo, _branch, _folder, _token, _api, _device]) {
+    for (final c in [
+      _repo,
+      _branch,
+      _folder,
+      _token,
+      _api,
+      _device,
+      _gitUrl,
+      _username,
+      _authorName,
+      _authorEmail,
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -71,6 +95,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   SyncSettings? _build() {
+    if (_kind == RemoteKind.git) return _buildGit();
     final parsed = _parseRepo(_repo.text);
     if (parsed == null) return null;
     final branch = _branch.text.trim().isEmpty
@@ -93,6 +118,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
       deviceName: _device.text.trim().isEmpty
           ? current.deviceName
           : _device.text.trim(),
+      kind: RemoteKind.github,
+      authorName: _authorName.text.trim(),
+      authorEmail: _authorEmail.text.trim(),
+    );
+  }
+
+  SyncSettings _buildGit() {
+    final current = context.read<AppState>().settings;
+    final url = _gitUrl.text.trim();
+    // Credentials typed into the URL (https://user:token@host/…) move to
+    // their own fields so they end up in the keychain, not preferences.
+    final uri = Uri.tryParse(url);
+    var user = _username.text.trim();
+    var token = _token.text.trim();
+    if (uri != null && uri.userInfo.isNotEmpty) {
+      final parts = uri.userInfo.split(':');
+      if (user.isEmpty) user = Uri.decodeComponent(parts.first);
+      if (token.isEmpty && parts.length > 1) {
+        token = Uri.decodeComponent(parts.skip(1).join(':'));
+      }
+    }
+    return current.copyWith(
+      kind: RemoteKind.git,
+      gitUrl: SyncSettings.normalizeGitUrl(url),
+      username: user,
+      token: token,
+      branch: _branch.text.trim().isEmpty ? 'main' : _branch.text.trim(),
+      folder: SyncSettings.normalizeFolder(_folder.text),
+      allowSelfSigned: _allowSelfSigned,
+      authorName: _authorName.text.trim(),
+      authorEmail: _authorEmail.text.trim(),
+      autoSync: _autoSync,
+      deviceName: _device.text.trim().isEmpty
+          ? current.deviceName
+          : _device.text.trim(),
     );
   }
 
@@ -104,7 +164,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _testResult = null;
     });
     try {
-      final msg = await GitHubRemote(s).testConnection();
+      final msg = await testRemote(s, context.read<AppState>().store.dataDir);
       setState(() {
         _testOk = true;
         _testResult = msg;
@@ -149,6 +209,117 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) Navigator.of(context).pop();
   }
 
+  static const _presets = <(String, String, String, String)>[
+    // name, URL example, user name hint, token hint
+    (
+      'GitHub',
+      'https://github.com/me/notes.git',
+      '아무 이름 (예: git)',
+      '개인 액세스 토큰 (Contents 읽기/쓰기)',
+    ),
+    (
+      'GitLab',
+      'https://gitlab.com/me/notes.git',
+      'GitLab 사용자명 또는 oauth2',
+      '개인 액세스 토큰 (write_repository)',
+    ),
+    (
+      'Gitea · Forgejo',
+      'https://git.example.com/me/notes.git',
+      '사용자명',
+      '액세스 토큰 또는 비밀번호',
+    ),
+    (
+      'Bitbucket',
+      'https://bitbucket.org/team/notes.git',
+      'Bitbucket 사용자명 (토큰이면 x-token-auth)',
+      '앱 비밀번호 또는 액세스 토큰',
+    ),
+    ('기타', 'https://서버/경로/notes.git', '사용자명', '비밀번호 또는 토큰'),
+  ];
+  int _preset = 0;
+
+  int _guessPreset(String url) {
+    final host = Uri.tryParse(url.trim())?.host ?? '';
+    if (host.endsWith('github.com')) return 0;
+    if (host.contains('gitlab')) return 1;
+    if (host.contains('gitea') ||
+        host.contains('forgejo') ||
+        host.contains('codeberg')) {
+      return 2;
+    }
+    if (host.contains('bitbucket')) return 3;
+    return host.isEmpty ? _preset : 4;
+  }
+
+  List<Widget> _gitFields() {
+    final preset = _presets[_preset];
+    return [
+      Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          for (var i = 0; i < _presets.length; i++)
+            ChoiceChip(
+              label: Text(_presets[i].$1),
+              selected: _preset == i,
+              onSelected: (_) => setState(() => _preset = i),
+            ),
+        ],
+      ),
+      TextFormField(
+        controller: _gitUrl,
+        keyboardType: TextInputType.url,
+        autocorrect: false,
+        decoration: InputDecoration(
+          labelText: '저장소 URL (HTTPS)',
+          hintText: preset.$2,
+          helperText: '서버의 "Clone" 버튼에 나오는 HTTPS 주소',
+          prefixIcon: const Icon(Icons.link_rounded),
+        ),
+        onChanged: (v) {
+          final guess = _guessPreset(v);
+          if (guess != _preset) setState(() => _preset = guess);
+        },
+        validator: (v) => SyncSettings.isValidGitUrl(v ?? '')
+            ? null
+            : 'https://… 형식의 저장소 주소를 입력하세요',
+      ),
+      TextFormField(
+        controller: _username,
+        autocorrect: false,
+        enableSuggestions: false,
+        decoration: InputDecoration(
+          labelText: '사용자명',
+          hintText: preset.$3,
+          prefixIcon: const Icon(Icons.person_outline_rounded),
+        ),
+      ),
+      TextFormField(
+        controller: _token,
+        obscureText: !_showToken,
+        autocorrect: false,
+        enableSuggestions: false,
+        decoration: InputDecoration(
+          labelText: '토큰 또는 비밀번호',
+          helperText: '${preset.$4} · 기기의 보안 저장소에 보관됩니다',
+          prefixIcon: const Icon(Icons.key_rounded),
+          suffixIcon: IconButton(
+            icon: Icon(_showToken ? Icons.visibility_off : Icons.visibility),
+            onPressed: () => setState(() => _showToken = !_showToken),
+          ),
+        ),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('자체 서명 인증서 허용'),
+        subtitle: const Text('사내망·NAS 등 공인 인증서가 없는 서버용. 믿을 수 있는 서버에서만 켜세요'),
+        value: _allowSelfSigned,
+        onChanged: (v) => setState(() => _allowSelfSigned = v),
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
@@ -173,18 +344,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       title: 'Git 저장소',
                       subtitle: '메모는 이 기기에 먼저 저장되고, 온라인일 때 지정한 저장소 폴더와 동기화됩니다.',
                       children: [
-                        TextFormField(
-                          controller: _repo,
-                          decoration: const InputDecoration(
-                            labelText: '저장소',
-                            hintText:
-                                'owner/repo 또는 https://github.com/owner/repo',
-                            prefixIcon: Icon(Icons.source_outlined),
-                          ),
-                          validator: (v) => _parseRepo(v ?? '') == null
-                              ? 'owner/repo 형식으로 입력하세요'
-                              : null,
+                        SegmentedButton<RemoteKind>(
+                          segments: const [
+                            ButtonSegment(
+                              value: RemoteKind.github,
+                              icon: Icon(Icons.hub_outlined),
+                              label: Text('GitHub'),
+                            ),
+                            ButtonSegment(
+                              value: RemoteKind.git,
+                              icon: Icon(Icons.dns_outlined),
+                              label: Text('Git 서버 (HTTPS)'),
+                            ),
+                          ],
+                          selected: {_kind},
+                          onSelectionChanged: (v) => setState(() {
+                            _kind = v.first;
+                            _testResult = null;
+                          }),
                         ),
+                        if (_kind == RemoteKind.git) ..._gitFields(),
+                        if (_kind == RemoteKind.github)
+                          TextFormField(
+                            controller: _repo,
+                            decoration: const InputDecoration(
+                              labelText: '저장소',
+                              hintText:
+                                  'owner/repo 또는 https://github.com/owner/repo',
+                              prefixIcon: Icon(Icons.source_outlined),
+                            ),
+                            validator: (v) => _parseRepo(v ?? '') == null
+                                ? 'owner/repo 형식으로 입력하세요'
+                                : null,
+                          ),
                         Row(
                           children: [
                             Expanded(
@@ -211,29 +403,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ),
                           ],
                         ),
-                        TextFormField(
-                          controller: _token,
-                          obscureText: !_showToken,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          decoration: InputDecoration(
-                            labelText: 'GitHub 액세스 토큰',
-                            helperText:
-                                'Fine-grained 토큰: 해당 저장소의 Contents 읽기/쓰기 권한',
-                            prefixIcon: const Icon(Icons.key_rounded),
-                            suffixIcon: IconButton(
-                              icon: Icon(
-                                _showToken
-                                    ? Icons.visibility_off
-                                    : Icons.visibility,
+                        if (_kind == RemoteKind.github)
+                          TextFormField(
+                            controller: _token,
+                            obscureText: !_showToken,
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            decoration: InputDecoration(
+                              labelText: 'GitHub 액세스 토큰',
+                              helperText:
+                                  'Fine-grained 토큰: 해당 저장소의 Contents 읽기/쓰기 권한',
+                              prefixIcon: const Icon(Icons.key_rounded),
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _showToken
+                                      ? Icons.visibility_off
+                                      : Icons.visibility,
+                                ),
+                                onPressed: () =>
+                                    setState(() => _showToken = !_showToken),
                               ),
-                              onPressed: () =>
-                                  setState(() => _showToken = !_showToken),
                             ),
+                            validator: (v) =>
+                                (v ?? '').trim().isEmpty ? '토큰을 입력하세요' : null,
                           ),
-                          validator: (v) =>
-                              (v ?? '').trim().isEmpty ? '토큰을 입력하세요' : null,
-                        ),
                         Row(
                           children: [
                             FilledButton.tonalIcon(
@@ -304,12 +497,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             prefixIcon: Icon(Icons.devices_rounded),
                           ),
                         ),
+                        if (_kind == RemoteKind.github)
+                          TextFormField(
+                            controller: _api,
+                            decoration: const InputDecoration(
+                              labelText: 'API 주소 (고급)',
+                              helperText:
+                                  'GitHub Enterprise: https://호스트/api/v3',
+                              prefixIcon: Icon(Icons.dns_outlined),
+                            ),
+                          ),
                         TextFormField(
-                          controller: _api,
+                          controller: _authorName,
                           decoration: const InputDecoration(
-                            labelText: 'API 주소 (고급)',
-                            helperText: 'GitHub Enterprise: https://호스트/api/v3',
-                            prefixIcon: Icon(Icons.dns_outlined),
+                            labelText: '커밋 작성자 이름',
+                            helperText: '비우면 기기 이름을 사용합니다',
+                            prefixIcon: Icon(Icons.person_outline_rounded),
+                          ),
+                        ),
+                        TextFormField(
+                          controller: _authorEmail,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: const InputDecoration(
+                            labelText: '커밋 작성자 이메일',
+                            prefixIcon: Icon(Icons.alternate_email_rounded),
                           ),
                         ),
                         if (app.lastError != null)

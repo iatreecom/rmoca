@@ -128,6 +128,9 @@ class LocalStore {
   }
 
   /// Where copies of remote images are kept for offline use.
+  /// App data outside the notes (caches such as git objects).
+  Directory get dataDir => _root;
+
   Directory get mediaDir => Directory(p.join(_root.path, 'media'));
 
   /// Every folder under the notes root ('a', 'a/b', ...), sorted.

@@ -11,10 +11,10 @@ import 'markdown/note_links.dart';
 import 'models/note.dart';
 import 'models/note_meta.dart';
 import 'models/sync_settings.dart';
-import 'services/github_remote.dart';
 import 'services/local_store.dart';
 import 'services/media_cache.dart';
 import 'services/remote.dart';
+import 'services/remote_factory.dart';
 import 'services/settings_repository.dart';
 import 'services/sync_engine.dart';
 
@@ -494,7 +494,7 @@ class AppState extends ChangeNotifier {
   Future<void> _runSync() async {
     status = SyncStatus.syncing;
     notifyListeners();
-    final remote = GitHubRemote(settings);
+    final remote = remoteFor(settings, store.dataDir);
     final engine = SyncEngine(
       store: store,
       remote: remote,

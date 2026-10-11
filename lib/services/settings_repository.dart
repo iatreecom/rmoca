@@ -31,6 +31,16 @@ class SettingsRepository {
       // Keychain unavailable; the user can enter the token again.
     }
     return SyncSettings(
+      kind:
+          RemoteKind.values
+              .where((k) => k.name == prefs.getString('remoteKind'))
+              .firstOrNull ??
+          RemoteKind.github,
+      gitUrl: prefs.getString('gitUrl') ?? '',
+      username: prefs.getString('gitUsername') ?? '',
+      allowSelfSigned: prefs.getBool('allowSelfSigned') ?? false,
+      authorName: prefs.getString('authorName') ?? '',
+      authorEmail: prefs.getString('authorEmail') ?? '',
       owner: prefs.getString('owner') ?? '',
       repo: prefs.getString('repo') ?? '',
       branch: prefs.getString('branch') ?? 'main',
@@ -44,6 +54,12 @@ class SettingsRepository {
 
   Future<void> save(SyncSettings s) async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('remoteKind', s.kind.name);
+    await prefs.setString('gitUrl', s.gitUrl);
+    await prefs.setString('gitUsername', s.username);
+    await prefs.setBool('allowSelfSigned', s.allowSelfSigned);
+    await prefs.setString('authorName', s.authorName);
+    await prefs.setString('authorEmail', s.authorEmail);
     await prefs.setString('owner', s.owner);
     await prefs.setString('repo', s.repo);
     await prefs.setString('branch', s.branch);
