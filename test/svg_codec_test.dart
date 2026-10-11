@@ -77,4 +77,44 @@ void main() {
     expect(decoded.height, Drawing.defaultHeight);
     expect(decoded.strokes.single.points.first.x, 400);
   });
+
+  test('text boxes round-trip as SVG text and erase as a whole', () {
+    final d = Drawing(
+      strokes: [
+        Stroke.text(
+          '첫 줄\n둘째 <줄> & "따옴표"',
+          const Offset(100, 200),
+          const Color(0xFF2563EB),
+          32,
+        ),
+        Stroke(
+          points: [PointVector(10, 10, 0.5), PointVector(50, 50, 0.5)],
+          color: const Color(0xFF000000),
+          size: 4,
+        ),
+      ],
+    );
+    final svg = SvgCodec.encode(d);
+    expect(svg, contains('<text'));
+    expect(svg, contains('<tspan'));
+    final back = SvgCodec.decode(svg)!;
+    expect(back.strokes, hasLength(2));
+    final t = back.strokes.firstWhere((s) => s.isText);
+    expect(t.text, '첫 줄\n둘째 <줄> & "따옴표"');
+    expect(t.anchor, const Offset(100, 200));
+    expect(t.size, 32);
+    expect(t.color.toARGB32(), 0xFF2563EB);
+
+    // Moving and scaling keep it a text box.
+    final moved = t
+        .translated(const Offset(10, 5))
+        .scaled(const Offset(110, 205), 2, 2);
+    expect(moved.isText, isTrue);
+    expect(moved.anchor, const Offset(110, 205));
+    expect(moved.size, 64);
+
+    // The area eraser removes the whole box.
+    expect(t.eraseArea(t.bounds.center, 4), isEmpty);
+    expect(t.hitTest(t.bounds.center, 1), isTrue);
+  });
 }

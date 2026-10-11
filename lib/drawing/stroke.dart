@@ -1,6 +1,7 @@
 import 'dart:ui';
 
-import 'package:flutter/material.dart' show Icons, IconData;
+import 'package:flutter/material.dart'
+    show Icons, IconData, TextPainter, TextSpan, TextStyle, TextDirection;
 import 'package:perfect_freehand/perfect_freehand.dart';
 
 /// Pen styles, like Samsung Notes' pen types.
@@ -72,9 +73,40 @@ class Stroke {
     required this.size,
     this.simulatePressure = false,
     this.type = PenType.pen,
+    this.text,
   });
 
+  /// A text box: [text] drawn with its top-left at the single point, in
+  /// [size] font size. Moves, scales, erases and undoes like ink.
+  factory Stroke.text(String text, Offset at, Color color, double fontSize) =>
+      Stroke(
+        points: [PointVector(at.dx, at.dy)],
+        color: color,
+        size: fontSize,
+        text: text,
+      );
+
   final List<PointVector> points;
+
+  /// Non-null for a text box.
+  final String? text;
+
+  bool get isText => text != null;
+
+  TextPainter? _painter;
+
+  /// Laid-out text of a text box.
+  TextPainter get textPainter => _painter ??= TextPainter(
+    text: TextSpan(
+      text: text,
+      style: TextStyle(color: inkColor, fontSize: size, height: textLineHeight),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+
+  static const textLineHeight = 1.3;
+
+  Offset get anchor => Offset(points.first.x, points.first.y);
 
   /// Base color; [type]'s opacity is applied on top when painting.
   final Color color;
@@ -115,21 +147,26 @@ class Stroke {
     options: options,
   );
 
-  Path get path => _path ??= outlineToPath(outline);
+  Path get path =>
+      _path ??= isText ? (Path()..addRect(bounds)) : outlineToPath(outline);
 
-  Rect get bounds => path.getBounds();
+  Rect get bounds => isText
+      ? anchor & Size(textPainter.width, textPainter.height)
+      : path.getBounds();
 
   Stroke copyWith({
     List<PointVector>? points,
     Color? color,
     double? size,
     PenType? type,
+    String? text,
   }) => Stroke(
     points: points ?? this.points,
     color: color ?? this.color,
     size: size ?? this.size,
     simulatePressure: simulatePressure,
     type: type ?? this.type,
+    text: text ?? this.text,
   );
 
   /// Moved by [delta].
@@ -197,6 +234,7 @@ class Stroke {
   /// Whether [point] is within [radius] of this stroke (for the eraser).
   bool hitTest(Offset point, double radius) {
     if (!bounds.inflate(radius).contains(point)) return false;
+    if (isText) return true;
     if (path.contains(point)) return true;
     final r = radius + _halfWidth;
     final r2 = r * r;
@@ -212,6 +250,8 @@ class Stroke {
   /// [point]. Returns the remaining pieces, or null if nothing was erased.
   List<Stroke>? eraseArea(Offset point, double radius) {
     if (!bounds.inflate(radius).contains(point)) return null;
+    // Text cannot be cut: the whole box goes.
+    if (isText) return const [];
     final r = radius + _halfWidth * 0.5;
     final r2 = r * r;
     // Densify so long segments can be cut in the middle.

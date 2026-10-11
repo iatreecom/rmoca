@@ -10,7 +10,7 @@ import 'shape_recognizer.dart';
 import 'stroke.dart';
 import 'svg_codec.dart';
 
-enum DrawTool { pen, eraser, lasso, hand }
+enum DrawTool { pen, eraser, lasso, hand, text }
 
 enum EraserMode {
   stroke('획 지우개'),
@@ -212,7 +212,12 @@ class DrawingController extends ChangeNotifier {
   void selectInside(Path lasso) {
     final selected = <int>{};
     for (var i = 0; i < drawing.strokes.length; i++) {
-      final pts = drawing.strokes[i].points;
+      final s = drawing.strokes[i];
+      if (s.isText) {
+        if (lasso.contains(s.bounds.center)) selected.add(i);
+        continue;
+      }
+      final pts = s.points;
       final inside = pts.where((p) => lasso.contains(p)).length;
       if (pts.isNotEmpty && inside >= pts.length * 0.6) selected.add(i);
     }
@@ -271,6 +276,47 @@ class DrawingController extends ChangeNotifier {
     _changed();
   }
 
+  /// Font size for new text boxes (page units; the page is 1000 wide).
+  double textSize = 28;
+
+  void setTextSize(double s) {
+    textSize = s;
+    notifyListeners();
+  }
+
+  /// Index of the text box at [point], if any (topmost first).
+  int? textAt(Offset point) {
+    for (var i = drawing.strokes.length - 1; i >= 0; i--) {
+      final s = drawing.strokes[i];
+      if (s.isText && s.bounds.inflate(6).contains(point)) return i;
+    }
+    return null;
+  }
+
+  /// Adds a text box, or replaces/removes (empty [text]) the one at [index].
+  void putText({int? index, required String text, Offset? at}) {
+    checkpoint();
+    if (index == null) {
+      if (text.trim().isEmpty) {
+        undoCheckpointIfUnused();
+        return;
+      }
+      drawing.strokes.add(Stroke.text(text, at!, color, textSize));
+    } else if (text.trim().isEmpty) {
+      drawing.strokes.removeAt(index);
+      selection = {};
+    } else {
+      final old = drawing.strokes[index];
+      drawing.strokes[index] = Stroke.text(
+        text,
+        old.anchor,
+        old.color,
+        old.size,
+      );
+    }
+    _changed();
+  }
+
   void growTo(double y) {
     if (y > drawing.height - 300) {
       drawing.height = (y + 800).ceilToDouble();
@@ -301,9 +347,14 @@ class DrawingCanvas extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onCommitted,
+    this.onText,
   });
 
   final DrawingController controller;
+
+  /// Text tool: a tap at [at] (page coordinates) on the text box [index],
+  /// or on empty paper (null) to start a new one.
+  final void Function(Offset at, int? index)? onText;
 
   /// Called after each change to the strokes (stroke, erase, move…).
   final VoidCallback onCommitted;
@@ -431,6 +482,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       _erase(page);
     } else if (c.tool == DrawTool.lasso) {
       _startLassoOrMove(e.localPosition, page);
+    } else if (c.tool == DrawTool.text) {
+      // Handled on release so a tap does not start anything else.
+      _gestureStart = page;
     } else if (c.tool == DrawTool.pen) {
       _gesture = _Gesture.draw;
       _simulate = e.kind != PointerDeviceKind.stylus;
@@ -504,6 +558,15 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     _primary = null;
     final gesture = _gesture;
     _gesture = _Gesture.none;
+    if (gesture == _Gesture.none &&
+        c.tool == DrawTool.text &&
+        !cancel &&
+        _gestureStart != null) {
+      final at = _gestureStart!;
+      _gestureStart = null;
+      widget.onText?.call(at, c.textAt(at));
+      return;
+    }
     switch (gesture) {
       case _Gesture.draw:
         if (cancel) {
@@ -791,6 +854,10 @@ void paintPage(Canvas canvas, Drawing d) {
 }
 
 void paintStroke(Canvas canvas, Stroke s) {
+  if (s.isText) {
+    s.textPainter.paint(canvas, s.anchor);
+    return;
+  }
   canvas.drawPath(
     s.path,
     Paint()

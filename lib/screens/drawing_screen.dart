@@ -109,6 +109,24 @@ class _DrawingScreenState extends State<DrawingScreen> {
     _saveTimer = Timer(const Duration(milliseconds: 1200), _save);
   }
 
+  /// Text tool: type a new text box at [at], or edit the one at [index].
+  Future<void> _editText(Offset at, int? index) async {
+    final c = _controller;
+    if (c == null) return;
+    final existing = index == null ? null : c.drawing.strokes[index];
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => _TextBoxDialog(
+        initial: existing?.text ?? '',
+        controller: c,
+        editing: existing != null,
+      ),
+    );
+    if (result == null || !mounted) return;
+    c.putText(index: index, text: result, at: at);
+    _onCommitted();
+  }
+
   Future<void> _save() async {
     final c = _controller;
     if (c == null || !_dirty) return;
@@ -190,6 +208,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
             c.setTool(DrawTool.lasso),
         const SingleActivator(LogicalKeyboardKey.keyH): () =>
             c.setTool(DrawTool.hand),
+        const SingleActivator(LogicalKeyboardKey.keyT): () =>
+            c.setTool(DrawTool.text),
       },
       child: PopScope(
         // Save as soon as the user leaves, before the screen is disposed.
@@ -236,6 +256,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
                   child: DrawingCanvas(
                     controller: c,
                     onCommitted: _onCommitted,
+                    onText: _editText,
                   ),
                 ),
                 Positioned(
@@ -324,6 +345,13 @@ class _Toolbar extends StatelessWidget {
                   tooltip: '올가미 선택 (L)',
                   selected: c.tool == DrawTool.lasso,
                   onTap: () => c.setTool(DrawTool.lasso),
+                ),
+                _ToolButton(
+                  icon: Icons.text_fields_rounded,
+                  tooltip: '텍스트 (T)',
+                  selected: c.tool == DrawTool.text,
+                  dotColor: c.tool == DrawTool.text ? c.color : null,
+                  onTap: () => c.setTool(DrawTool.text),
                 ),
                 _ToolButton(
                   icon: Icons.pan_tool_outlined,
@@ -976,6 +1004,98 @@ class _ColorPickerDialogState extends State<_ColorPickerDialog> {
         FilledButton(
           onPressed: () => Navigator.pop(context, color),
           child: const Text('선택'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Typing a text box: the text, plus its size for new boxes.
+class _TextBoxDialog extends StatefulWidget {
+  const _TextBoxDialog({
+    required this.initial,
+    required this.controller,
+    required this.editing,
+  });
+
+  final String initial;
+  final DrawingController controller;
+  final bool editing;
+
+  @override
+  State<_TextBoxDialog> createState() => _TextBoxDialogState();
+}
+
+class _TextBoxDialogState extends State<_TextBoxDialog> {
+  late final _text = TextEditingController(text: widget.initial);
+
+  static const _sizes = [
+    ('작게', 20.0),
+    ('보통', 28.0),
+    ('크게', 40.0),
+    ('제목', 60.0),
+  ];
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller;
+    return AlertDialog(
+      title: Text(widget.editing ? '텍스트 편집' : '텍스트 넣기'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _text,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 6,
+              decoration: const InputDecoration(hintText: '내용'),
+            ),
+            if (!widget.editing) ...[
+              const SizedBox(height: 12),
+              ListenableBuilder(
+                listenable: c,
+                builder: (context, _) => Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final (label, size) in _sizes)
+                      ChoiceChip(
+                        label: Text(label),
+                        selected: c.textSize == size,
+                        onSelected: (_) => c.setTextSize(size),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        if (widget.editing)
+          TextButton(
+            onPressed: () => Navigator.pop(context, ''),
+            child: Text(
+              '삭제',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _text.text),
+          child: const Text('확인'),
         ),
       ],
     );

@@ -98,6 +98,10 @@ class SvgCodec {
           b.element('rect', attributes: {...rect, 'fill': 'url(#rmoca-paper)'});
         }
         for (final s in d.strokes) {
+          if (s.isText) {
+            _text(b, s);
+            continue;
+          }
           b.element(
             'path',
             attributes: {
@@ -137,7 +141,13 @@ class SvgCodec {
       return null;
     }
     final strokes = <Stroke>[];
-    for (final el in root.findAllElements('path')) {
+    for (final el in root.descendantElements) {
+      if (el.name.local == 'text' && el.getAttribute('data-text') != null) {
+        final t = _decodeText(el);
+        if (t != null) strokes.add(t);
+        continue;
+      }
+      if (el.name.local != 'path') continue;
       final raw = el.getAttribute('data-points');
       if (raw == null || raw.trim().isEmpty) continue;
       final points = <PointVector>[];
@@ -170,6 +180,56 @@ class SvgCodec {
       height:
           _attr(root, 'data-page-height', 'height') ?? Drawing.defaultHeight,
       paper: PaperStyle.byName(root.getAttribute('data-paper')),
+    );
+  }
+
+  /// A text box as SVG `<text>` with one `<tspan>` per line, so it shows
+  /// in any viewer. `y` is the top of the box (first line is moved down by
+  /// one line height).
+  static void _text(XmlBuilder b, Stroke s) {
+    final lineHeight = s.size * Stroke.textLineHeight;
+    b.element(
+      'text',
+      attributes: {
+        'x': _num(s.anchor.dx),
+        'y': _num(s.anchor.dy),
+        'font-size': _num(s.size),
+        'font-family': 'sans-serif',
+        'fill': _hex(s.color),
+        if (s.inkColor.a < 1) 'fill-opacity': s.inkColor.a.toStringAsFixed(3),
+        'data-text': '1',
+      },
+      nest: () {
+        final lines = s.text!.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          b.element(
+            'tspan',
+            attributes: {
+              'x': _num(s.anchor.dx),
+              // Baseline of each line, relative to the previous one.
+              'dy': _num(i == 0 ? s.size * 1.05 : lineHeight),
+            },
+            nest: lines[i].isEmpty ? '\u00a0' : lines[i],
+          );
+        }
+      },
+    );
+  }
+
+  static Stroke? _decodeText(XmlElement el) {
+    final x = double.tryParse(el.getAttribute('x') ?? '');
+    final y = double.tryParse(el.getAttribute('y') ?? '');
+    final size = double.tryParse(el.getAttribute('font-size') ?? '');
+    if (x == null || y == null || size == null) return null;
+    final spans = el.findElements('tspan').toList();
+    final text = spans.isEmpty
+        ? el.innerText
+        : spans.map((t) => t.innerText.replaceAll('\u00a0', '')).join('\n');
+    return Stroke.text(
+      text,
+      Offset(x, y),
+      _parseHex(el.getAttribute('fill')) ?? const Color(0xFF000000),
+      size,
     );
   }
 
