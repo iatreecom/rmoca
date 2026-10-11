@@ -9,6 +9,7 @@ import 'package:re_highlight/styles/github.dart';
 
 import '../widgets/math_view.dart';
 import '../widgets/mermaid_block.dart';
+import '../theme.dart';
 
 /// Link scheme for `[[wikilinks]]`; the rest is the encoded target.
 const wikiScheme = 'rmoca-wiki:';
@@ -221,8 +222,8 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
     if (language == 'mermaid') return MermaidBlock(code);
     final dark = Theme.of(context).brightness == Brightness.dark;
     final base = TextStyle(
-      fontFamily: 'monospace',
-      fontFamilyFallback: const ['Menlo', 'Consolas', 'Roboto Mono'],
+      fontFamily: monoFont,
+      fontFamilyFallback: monoFallback,
       fontSize: 13.5,
       height: 1.5,
       color: dark ? const Color(0xFFABB2BF) : const Color(0xFF24292E),

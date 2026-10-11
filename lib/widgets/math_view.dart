@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 
 import '../markdown/tex.dart';
+import '../theme.dart';
 
 /// LaTeX formula, inline or display. Unsupported input shows the source
 /// (with the parser's message on hover) instead of failing silently.
@@ -32,8 +33,8 @@ class MathView extends StatelessWidget {
         child: Text(
           display ? '\$\$${tex.trim()}\$\$' : '\$$tex\$',
           style: base.copyWith(
-            fontFamily: 'monospace',
-            fontFamilyFallback: const ['Menlo', 'Consolas'],
+            fontFamily: monoFont,
+            fontFamilyFallback: monoFallback,
             color: theme.colorScheme.error,
             decoration: TextDecoration.underline,
             decorationStyle: TextDecorationStyle.wavy,

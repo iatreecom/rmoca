@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:mermaid_flutter/mermaid_flutter.dart';
 
+import '../theme.dart';
+
 /// A ```mermaid block, drawn natively (no WebView, works offline) with the
 /// app's colors. Wide diagrams shrink to fit; the expand button opens a
 /// pan/zoom view.
@@ -107,8 +109,8 @@ class _MermaidError extends StatelessWidget {
           SelectableText(
             source,
             style: TextStyle(
-              fontFamily: 'monospace',
-              fontFamilyFallback: const ['Menlo', 'Consolas'],
+              fontFamily: monoFont,
+              fontFamilyFallback: monoFallback,
               fontSize: 13,
               color: scheme.onSurfaceVariant,
             ),

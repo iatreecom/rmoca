@@ -312,6 +312,9 @@ class LocalStore {
   });
 
   /// Writes without taking [lock]; only for callers already holding it.
+  Future<void> writeBytes(String path, List<int> bytes) =>
+      lock.run(() => writeBytesUnlocked(path, bytes));
+
   Future<void> writeBytesUnlocked(String path, List<int> bytes) async {
     final file = fileFor(path);
     await file.parent.create(recursive: true);

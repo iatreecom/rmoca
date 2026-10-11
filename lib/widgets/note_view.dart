@@ -10,6 +10,7 @@ import '../markdown/obsidian_syntax.dart';
 import '../markdown/html_lite.dart';
 import '../models/note.dart';
 import 'media_view.dart';
+import '../theme.dart';
 
 /// What a [NoteView] can ask its screen to do.
 class NoteViewActions {
@@ -41,6 +42,7 @@ class NoteView extends StatelessWidget {
     required this.actions,
     this.headingKeys,
     this.depth = 0,
+    this.selectable = true,
   });
 
   final String source;
@@ -49,6 +51,9 @@ class NoteView extends StatelessWidget {
 
   /// Source line of a heading -> key, so an outline can scroll to it.
   final Map<int, GlobalKey>? headingKeys;
+
+  /// Text can be selected (reading); off where a tap means "edit".
+  final bool selectable;
 
   /// Embed nesting level; embeds stop after a couple of levels.
   final int depth;
@@ -119,7 +124,7 @@ class NoteView extends StatelessWidget {
     final headingBuilder = HeadingBuilder(nextHeadingKey);
     return MarkdownBody(
       data: text,
-      selectable: true,
+      selectable: selectable,
       extensionSet: obsidianExtensions,
       inlineSyntaxes: obsidianInlineSyntaxes(),
       styleSheet: noteStyleSheet(context),
@@ -236,8 +241,8 @@ MarkdownStyleSheet noteStyleSheet(BuildContext context) {
       decorationColor: scheme.primary.withValues(alpha: 0.4),
     ),
     code: t.bodyMedium!.copyWith(
-      fontFamily: 'monospace',
-      fontFamilyFallback: const ['Menlo', 'Consolas', 'Roboto Mono'],
+      fontFamily: monoFont,
+      fontFamilyFallback: monoFallback,
       backgroundColor: scheme.surfaceContainerHighest,
       color: scheme.tertiary,
     ),

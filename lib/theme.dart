@@ -103,3 +103,18 @@ ThemeData buildTheme(Color seed, Brightness brightness) {
     ),
   );
 }
+
+/// Monospace text (code, markdown source). Named fonts first: the generic
+/// `monospace` can resolve to a CJK font that draws `\` as `¥`.
+const monoFont = 'DejaVu Sans Mono';
+const monoFallback = [
+  'Menlo',
+  'SF Mono',
+  'Consolas',
+  'Cascadia Mono',
+  'Roboto Mono',
+  'Droid Sans Mono',
+  'Noto Sans Mono',
+  'Liberation Mono',
+  'monospace',
+];

@@ -57,6 +57,9 @@ class AppState extends ChangeNotifier {
   /// Every folder, including empty ones ('a', 'a/b', ...).
   List<String> folders = [];
   DrawingMode drawingMode = DrawingMode.file;
+
+  /// Edit notes block by block (true) or as plain markdown.
+  bool easyEditing = true;
   SortMode sortMode = SortMode.modifiedDesc;
   ThemeMode themeMode = ThemeMode.system;
   Color accent = accentColors.first;
@@ -107,6 +110,7 @@ class AppState extends ChangeNotifier {
   Future<void> init() async {
     settings = await _settingsRepo.load();
     drawingMode = await _settingsRepo.loadDrawingMode();
+    easyEditing = await _settingsRepo.loadEasyEditing();
     sortMode = await _settingsRepo.loadSortMode();
     final (mode, color) = await _settingsRepo.loadAppearance(accent);
     themeMode = mode;
@@ -268,6 +272,27 @@ class AppState extends ChangeNotifier {
   }
 
   // --- note operations -----------------------------------------------------
+
+  Future<void> setEasyEditing(bool value) async {
+    if (easyEditing == value) return;
+    easyEditing = value;
+    notifyListeners();
+    await _settingsRepo.saveEasyEditing(value);
+  }
+
+  static const attachmentsFolder = 'attachments';
+
+  /// Stores [bytes] as a new file in `attachments/` named after [name]
+  /// (made unique); returns its path. Synced like notes.
+  Future<String> saveAttachment(String name, List<int> bytes) async {
+    final path = await store.uniquePath(
+      Note.join(attachmentsFolder, sanitizeName(name)),
+    );
+    await store.writeBytes(path, bytes);
+    await refreshNotes();
+    _scheduleSync();
+    return path;
+  }
 
   Future<void> saveText(String path, String content) async {
     await store.writeText(path, content);

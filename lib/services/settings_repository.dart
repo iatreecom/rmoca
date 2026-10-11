@@ -103,6 +103,16 @@ class SettingsRepository {
     await prefs.setInt('accent', accent.toARGB32());
   }
 
+  Future<bool> loadEasyEditing() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('easyEditing') ?? true;
+  }
+
+  Future<void> saveEasyEditing(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('easyEditing', value);
+  }
+
   Future<SortMode> loadSortMode() async {
     final prefs = await SharedPreferences.getInstance();
     final name = prefs.getString('sortMode');

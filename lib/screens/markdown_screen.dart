@@ -2,18 +2,28 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../markdown/edit_helpers.dart';
 import '../markdown/embedded_drawings.dart';
 import '../markdown/link_rewriter.dart';
 import '../markdown/note_document.dart';
+import '../markdown/md_table.dart';
 import '../models/note.dart';
+import '../widgets/block_editor.dart';
+import '../widgets/block_menu.dart';
+import '../widgets/markdown_help.dart';
 import '../widgets/note_view.dart';
+import '../widgets/table_editor.dart';
+import '../widgets/wiki_suggestions.dart';
 import '../widgets/sync_indicator.dart';
 import 'drawing_screen.dart';
 import 'navigation.dart';
+import '../theme.dart';
 
 /// Markdown editor with a rendered preview; saves automatically.
 class MarkdownScreen extends StatefulWidget {
@@ -35,12 +45,17 @@ class MarkdownScreen extends StatefulWidget {
   State<MarkdownScreen> createState() => _MarkdownScreenState();
 }
 
+/// Reading, easy (block) editing, or plain markdown editing.
+enum _Mode { read, easy, markdown }
+
 class _MarkdownScreenState extends State<MarkdownScreen> {
   final _text = TextEditingController();
   final _focus = FocusNode();
   final _scroll = ScrollController();
   final Map<int, GlobalKey> _headingKeys = {};
-  late bool _editing = widget.startEditing;
+  final Map<int, GlobalKey> _blockHeadingKeys = {};
+  final _blockKey = GlobalKey<BlockEditorState>();
+  late _Mode _mode;
   bool _loading = true;
   bool _dirty = false;
   String _lastText = '';
@@ -52,6 +67,7 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
   void initState() {
     super.initState();
     _app = context.read<AppState>();
+    _mode = widget.startEditing ? _editMode : _Mode.read;
     _load();
     _text.addListener(_onChanged);
     _externalSub = _app.externalChanges.listen((paths) {
@@ -89,12 +105,16 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     final first = _loading;
     setState(() {
       _loading = false;
-      if (content.isEmpty) _editing = true;
+      if (content.isEmpty && _mode == _Mode.read) _mode = _editMode;
     });
     if (first && widget.openDrawingId != null) {
       _editEmbedded(widget.openDrawingId!, null);
     } else if (_editing) {
       _focus.requestFocus();
+    } else if (first && _easy && widget.startEditing) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _blockKey.currentState?.startAtEnd(),
+      );
     }
   }
 
@@ -107,12 +127,25 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     }
     final previous = _lastText;
     _lastText = text;
-    if (_continueList(previous)) return;
+    if (_editing) {
+      final continued = continueList(previous, _text.value);
+      if (continued != null) {
+        _text.value = continued;
+        return;
+      }
+    }
     _dirty = true;
     setState(() {}); // Refresh the preview.
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 800), _save);
+    if (_editing && typedSlashAtLineStart(previous, _text.value)) {
+      _slashMenu();
+    }
   }
+
+  bool get _editing => _mode == _Mode.markdown;
+  bool get _easy => _mode == _Mode.easy;
+  _Mode get _editMode => _app.easyEditing ? _Mode.easy : _Mode.markdown;
 
   Future<void> _save() async {
     if (!_dirty) return;
@@ -122,121 +155,144 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
 
   // --- editing helpers -------------------------------------------------------
 
-  static final _listItem = RegExp(
-    r'^(\s*)([-*+]|(\d+)([.)]))(\s+\[[ xX]\])?\s+(.*)$',
-  );
-
-  /// After Enter on a list item, starts the next item (or ends the list
-  /// when the item was empty), like Obsidian.
-  bool _continueList(String previous) {
-    final text = _text.text;
-    final sel = _text.selection;
-    if (!sel.isCollapsed || text.length != previous.length + 1) return false;
-    final pos = sel.start;
-    if (pos < 1 || text[pos - 1] != '\n') return false;
-    if (text.substring(0, pos - 1) != previous.substring(0, pos - 1)) {
-      return false;
-    }
-    final lineStart = text.lastIndexOf('\n', pos - 2) + 1;
-    final line = text.substring(lineStart, pos - 1);
-    final m = _listItem.firstMatch(line);
-    if (m == null) return false;
-
-    if (m[6]!.trim().isEmpty) {
-      // Empty item: remove its bullet instead of adding another.
-      _text.value = TextEditingValue(
-        text: text.substring(0, lineStart) + text.substring(pos),
-        selection: TextSelection.collapsed(offset: lineStart),
-      );
-      return true;
-    }
-    final number = m[3] == null ? null : int.parse(m[3]!) + 1;
-    final bullet = number == null ? m[2]! : '$number${m[4]}';
-    final task = m[5] == null ? '' : ' [ ]';
-    final prefix = '${m[1]}$bullet$task ';
-    _text.value = TextEditingValue(
-      text: text.substring(0, pos) + prefix + text.substring(pos),
-      selection: TextSelection.collapsed(offset: pos + prefix.length),
-    );
-    return true;
-  }
-
   void _wrap(String before, [String after = '']) {
-    final sel = _text.selection;
-    final text = _text.text;
-    if (!sel.isValid) {
-      _text.text = '$text$before$after';
+    if (_easy) {
+      _blockKey.currentState?.wrap(before, after);
       return;
     }
-    final selected = sel.textInside(text);
-    _text.value = TextEditingValue(
-      text:
-          sel.textBefore(text) +
-          before +
-          selected +
-          after +
-          sel.textAfter(text),
-      selection: TextSelection.collapsed(
-        offset:
-            sel.start +
-            before.length +
-            selected.length +
-            (selected.isEmpty ? 0 : after.length),
-      ),
-    );
+    _text.value = wrapSelection(_text.value, before, after);
     _focus.requestFocus();
   }
 
   void _linePrefix(String prefix) {
-    final sel = _text.selection;
-    final text = _text.text;
-    final pos = sel.isValid ? sel.start : text.length;
-    final lineStart = text.lastIndexOf('\n', pos == 0 ? 0 : pos - 1) + 1;
-    _text.value = TextEditingValue(
-      text: text.substring(0, lineStart) + prefix + text.substring(lineStart),
-      selection: TextSelection.collapsed(offset: pos + prefix.length),
-    );
+    if (_easy) {
+      _blockKey.currentState?.linePrefix(prefix);
+      return;
+    }
+    _text.value = setLinePrefix(_text.value, prefix);
     _focus.requestFocus();
   }
 
+  /// Inserts [block] on its own lines at the cursor; [caretMark] in it marks
+  /// where the cursor goes.
   void _insertBlock(String block) {
     final sel = _text.selection;
     final text = _text.text;
     final pos = sel.isValid ? sel.start : text.length;
     final before = text.substring(0, pos);
+    final after = text.substring(pos);
     final lead = before.isEmpty || before.endsWith('\n\n')
         ? ''
         : (before.endsWith('\n') ? '\n' : '\n\n');
-    final inserted = '$lead$block\n';
+    final tail = after.isEmpty
+        ? '\n'
+        : after.startsWith('\n\n')
+        ? ''
+        : (after.startsWith('\n') ? '\n' : '\n\n');
+    final caret = block.indexOf(caretMark);
+    final clean = block.replaceFirst(caretMark, '');
     _text.value = TextEditingValue(
-      text: before + inserted + text.substring(pos),
-      selection: TextSelection.collapsed(offset: pos + inserted.length),
-    );
-    _focus.requestFocus();
-  }
-
-  /// `[[partial` right before the cursor, if any.
-  String? get _wikiQuery {
-    final sel = _text.selection;
-    if (!_editing || !sel.isValid || !sel.isCollapsed) return null;
-    final before = _text.text.substring(0, sel.start);
-    return RegExp(r'\[\[([^\[\]\n|#]*)$').firstMatch(before)?[1];
-  }
-
-  void _completeWiki(String name) {
-    final sel = _text.selection;
-    final text = _text.text;
-    final query = _wikiQuery ?? '';
-    final start = sel.start - query.length;
-    final after = text.substring(sel.start);
-    final close = after.startsWith(']]') ? '' : ']]';
-    _text.value = TextEditingValue(
-      text: text.substring(0, start) + name + close + after,
+      text: before + lead + clean + tail + after,
       selection: TextSelection.collapsed(
-        offset: start + name.length + (close.isEmpty ? 2 : close.length),
+        offset: pos + lead.length + (caret < 0 ? clean.length : caret),
       ),
     );
-    _focus.requestFocus();
+    if (_editing) _focus.requestFocus();
+  }
+
+  /// The `/` menu in the markdown editor.
+  Future<void> _slashMenu() async {
+    final t = await showBlockMenu(context);
+    if (t == null || !mounted) return;
+    final v = _text.value;
+    final pos = v.selection.start;
+    if (pos > 0 && v.text[pos - 1] == '/') {
+      _text.value = TextEditingValue(
+        text: v.text.substring(0, pos - 1) + v.text.substring(pos),
+        selection: TextSelection.collapsed(offset: pos - 1),
+      );
+    }
+    await _applyTemplate(t);
+  }
+
+  Future<void> _applyTemplate(BlockTemplate t) async {
+    switch (t.action) {
+      case BlockAction.image:
+      case BlockAction.camera:
+        final md = await _pickImage(camera: t.action == BlockAction.camera);
+        if (md != null && mounted) _insertBlock(md);
+      case BlockAction.drawing:
+        await _insertDrawing();
+      case BlockAction.table:
+        await _insertTable();
+      case BlockAction.date:
+      case BlockAction.time:
+        _text.value = insertSnippet(_text.value, t.resolve(DateTime.now()));
+        _focus.requestFocus();
+      case BlockAction.text:
+        if (t.blockLevel) {
+          _insertBlock(t.snippet);
+        } else {
+          _text.value = insertSnippet(_text.value, t.snippet);
+          _focus.requestFocus();
+        }
+    }
+  }
+
+  Future<void> _insertTable() async {
+    final table = await showTableEditor(context, MdTable.blank(3, 2));
+    if (table == null || table.rows.isEmpty && table.columns == 1 || !mounted) {
+      return;
+    }
+    _insertBlock(table.encode());
+  }
+
+  Future<void> _showHelp() async {
+    final syntax = await showMarkdownHelp(context, widget.path);
+    if (syntax == null || !mounted) return;
+    if (_easy) {
+      _blockKey.currentState?.insertText(syntax);
+    } else {
+      _insertBlock(syntax);
+    }
+  }
+
+  // --- images ----------------------------------------------------------------
+
+  /// Picks a photo (or takes one), stores it in `attachments/` and returns
+  /// a markdown image link to it.
+  Future<String?> _pickImage({required bool camera}) async {
+    XFile? file;
+    try {
+      file = await ImagePicker().pickImage(
+        source: camera ? ImageSource.camera : ImageSource.gallery,
+        maxWidth: 2400,
+        maxHeight: 2400,
+        imageQuality: 85,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              camera ? '이 기기에서는 카메라를 사용할 수 없습니다' : '이미지를 가져올 수 없습니다: $e',
+            ),
+          ),
+        );
+      }
+      return null;
+    }
+    if (file == null) return null;
+    final bytes = await file.readAsBytes();
+    var ext = p.extension(file.name).toLowerCase();
+    if (!Note.attachmentExtensions.contains(ext)) ext = '.jpg';
+    final stamp = DateFormat('yyyyMMdd-HHmmss').format(DateTime.now());
+    final path = await _app.saveAttachment(
+      '${camera ? 'photo' : 'image'}-$stamp$ext',
+      bytes,
+    );
+    final rel = p.posix.relative(path, from: _noteDir.isEmpty ? '.' : _noteDir);
+    return '![${p.posix.basenameWithoutExtension(path)}](${LinkRewriter.format(rel)})';
   }
 
   // --- drawings --------------------------------------------------------------
@@ -307,7 +363,7 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     }
     final rel = p.posix.relative(path, from: _noteDir.isEmpty ? '.' : _noteDir);
     final name = p.posix.basenameWithoutExtension(path);
-    _wrap('![$name](${LinkRewriter.format(rel)})\n');
+    _insertBlock('![$name](${LinkRewriter.format(rel)})');
   }
 
   /// Opens the editor for the embedded drawing [id]; [svg] is its current
@@ -397,10 +453,11 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     );
     if (line == null || !mounted) return;
     if (_editing && MediaQuery.sizeOf(context).width < 900) {
-      setState(() => _editing = false);
+      setState(() => _mode = _Mode.read);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = _headingKeys[line]?.currentContext;
+      final keys = _easy ? _blockHeadingKeys : _headingKeys;
+      final ctx = keys[line]?.currentContext;
       if (ctx != null) {
         Scrollable.ensureVisible(
           ctx,
@@ -451,17 +508,7 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
 
   Widget _editor() {
     final scheme = Theme.of(context).colorScheme;
-    final query = _wikiQuery;
-    final suggestions = query == null
-        ? const <Note>[]
-        : _app.notes
-              .where(
-                (n) =>
-                    n.path != widget.path &&
-                    n.title.toLowerCase().contains(query.toLowerCase()),
-              )
-              .take(8)
-              .toList();
+    final query = wikiQueryOf(_text.value);
     final words = EmbeddedDrawings.textOnly(_text.text);
     final wordCount = RegExp(r'\S+').allMatches(words).length;
     return Column(
@@ -503,51 +550,30 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
               '콜아웃',
               () => _insertBlock('> [!note] 제목\n> 내용'),
             ),
-            _Tool(
-              Icons.table_chart_outlined,
-              '표',
-              () => _insertBlock('| 항목 | 내용 |\n| --- | --- |\n|  |  |'),
-            ),
+            _Tool(Icons.table_chart_outlined, '표', _insertTable),
             _Tool(Icons.functions_rounded, '수식', () => _wrap(r'$', r'$')),
+            _Tool(Icons.image_outlined, '사진', () async {
+              final md = await _pickImage(camera: false);
+              if (md != null && mounted) _insertBlock(md);
+            }),
             _Tool(Icons.draw_rounded, '그림 삽입', _insertDrawing),
+            null,
+            _Tool(Icons.add_box_outlined, '블록 넣기 (/)', () async {
+              final t = await showBlockMenu(context);
+              if (t != null && mounted) await _applyTemplate(t);
+            }),
+            _Tool(Icons.help_outline_rounded, '마크다운 문법', _showHelp),
           ],
         ),
-        if (suggestions.isNotEmpty || (query?.isNotEmpty ?? false))
-          Container(
-            height: 48,
-            color: scheme.surfaceContainerLow,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              children: [
-                for (final n in suggestions)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ActionChip(
-                      avatar: Icon(
-                        n.kind == NoteKind.drawing
-                            ? Icons.draw_outlined
-                            : Icons.description_outlined,
-                        size: 16,
-                      ),
-                      label: Text(n.title),
-                      onPressed: () => _completeWiki(
-                        n.kind == NoteKind.drawing
-                            ? p.posix.basename(n.path)
-                            : n.title,
-                      ),
-                    ),
-                  ),
-                if (query != null &&
-                    query.isNotEmpty &&
-                    !suggestions.any((n) => n.title == query))
-                  ActionChip(
-                    avatar: const Icon(Icons.add_rounded, size: 16),
-                    label: Text("새 메모 '$query'"),
-                    onPressed: () => _completeWiki(query),
-                  ),
-              ],
-            ),
+        if (query != null)
+          WikiSuggestions(
+            query: query,
+            notes: _app.notes,
+            currentPath: widget.path,
+            onPick: (name) {
+              _text.value = completeWiki(_text.value, name);
+              _focus.requestFocus();
+            },
           ),
         const Divider(height: 1),
         Expanded(
@@ -559,8 +585,8 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
             keyboardType: TextInputType.multiline,
             textAlignVertical: TextAlignVertical.top,
             style: const TextStyle(
-              fontFamily: 'monospace',
-              fontFamilyFallback: ['Menlo', 'Consolas', 'Roboto Mono'],
+              fontFamily: monoFont,
+              fontFamilyFallback: monoFallback,
               fontSize: 15,
               height: 1.6,
             ),
@@ -591,11 +617,31 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
     );
   }
 
-  void _toggleMode() {
-    setState(() => _editing = !_editing);
-    if (_editing) _focus.requestFocus();
+  void _setMode(_Mode mode) {
+    if (mode == _mode) return;
+    _blockKey.currentState?.finish();
+    setState(() => _mode = mode);
+    if (mode != _Mode.read) _app.setEasyEditing(mode == _Mode.easy);
+    if (mode == _Mode.markdown) _focus.requestFocus();
     _save();
   }
+
+  void _toggleMode() => _setMode(_mode == _Mode.read ? _editMode : _Mode.read);
+
+  Widget _blockEditor() => BlockEditor(
+    key: _blockKey,
+    source: _text.text,
+    notePath: widget.path,
+    actions: _actions,
+    headingKeys: _blockHeadingKeys,
+    scrollController: _scroll,
+    onChanged: (source) => _text.text = source,
+    onPickImage: _pickImage,
+    onInsertDrawing: (offset) async {
+      _text.selection = TextSelection.collapsed(offset: offset);
+      await _insertDrawing();
+    },
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -633,7 +679,11 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
               ],
             );
           } else {
-            body = _editing ? _editor() : _preview();
+            body = switch (_mode) {
+              _Mode.read => _preview(),
+              _Mode.easy => _blockEditor(),
+              _Mode.markdown => _editor(),
+            };
           }
           return Scaffold(
             appBar: AppBar(
@@ -662,29 +712,38 @@ class _MarkdownScreenState extends State<MarkdownScreen> {
                   icon: const Icon(Icons.toc_rounded),
                   onPressed: _showOutline,
                 ),
+                if (_mode != _Mode.read)
+                  IconButton(
+                    tooltip: '마크다운 문법',
+                    icon: const Icon(Icons.help_outline_rounded),
+                    onPressed: _showHelp,
+                  ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: SegmentedButton<bool>(
+                  child: SegmentedButton<_Mode>(
                     showSelectedIcon: false,
                     style: const ButtonStyle(
                       visualDensity: VisualDensity.compact,
                     ),
                     segments: const [
                       ButtonSegment(
-                        value: false,
+                        value: _Mode.read,
                         icon: Icon(Icons.chrome_reader_mode_outlined, size: 18),
                         tooltip: '읽기 (Ctrl+E)',
                       ),
                       ButtonSegment(
-                        value: true,
-                        icon: Icon(Icons.edit_outlined, size: 18),
-                        tooltip: '편집 (Ctrl+E)',
+                        value: _Mode.easy,
+                        icon: Icon(Icons.view_agenda_outlined, size: 18),
+                        tooltip: '쉬운 편집 (블록)',
+                      ),
+                      ButtonSegment(
+                        value: _Mode.markdown,
+                        icon: Icon(Icons.code_rounded, size: 18),
+                        tooltip: '마크다운 편집',
                       ),
                     ],
-                    selected: {_editing},
-                    onSelectionChanged: (s) {
-                      if (s.first != _editing) _toggleMode();
-                    },
+                    selected: {_mode},
+                    onSelectionChanged: (s) => _setMode(s.first),
                   ),
                 ),
                 const SyncIndicator(),

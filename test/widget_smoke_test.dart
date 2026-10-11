@@ -222,6 +222,7 @@ void main() {}
   testWidgets('Enter continues lists and ends them on an empty item', (
     tester,
   ) async {
+    app.easyEditing = false;
     await tester.runAsync(() => app.store.writeText('l.md', '- [ ] one'));
     await tester.pumpWidget(
       wrap(const MarkdownScreen(path: 'l.md', startEditing: true)),
@@ -249,6 +250,41 @@ void main() {}
     );
     await tester.pump();
     expect(editable.text, '- [ ] one\n');
+  });
+
+  testWidgets('easy mode edits one block and keeps the rest', (tester) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    const source = '# 제목\n\n첫 문단\n\n- [ ] 할 일\n';
+    await tester.runAsync(() => app.store.writeText('e.md', source));
+    await tester.pumpWidget(
+      wrap(const MarkdownScreen(path: 'e.md')),
+    );
+    await settle(tester);
+    await tester.tap(find.byIcon(Icons.view_agenda_outlined));
+    await tester.pump();
+    // Rendered, not raw markdown.
+    expect(find.text('첫 문단'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+
+    await tester.tap(find.text('첫 문단'));
+    await tester.pump();
+    final field = find.byType(TextField);
+    expect(field, findsOneWidget);
+    final ctl = tester.widget<TextField>(field).controller!;
+    expect(ctl.text, '첫 문단');
+    await tester.enterText(field, '**바뀐** 문단');
+    await tester.pump();
+    await tester.tap(find.text('완료'));
+    await tester.pump();
+    expect(find.byType(TextField), findsNothing);
+
+    // Leaving the screen saves.
+    await tester.pumpWidget(wrap(const SizedBox()));
+    await settle(tester);
+    final saved = await tester.runAsync(() => app.store.readText('e.md'));
+    expect(saved, '# 제목\n\n**바뀐** 문단\n\n- [ ] 할 일\n');
   });
 
   testWidgets('daily note is created in Daily/', (tester) async {
